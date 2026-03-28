@@ -1,0 +1,11 @@
+bsk-rl[rlib]
+gymnasium
+ray[rllib]
+ray[tune]
+numpy
+
+
+Possible:
+dm-tree
+lz4
+torch
