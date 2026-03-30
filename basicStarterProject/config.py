@@ -8,7 +8,7 @@ class EnvConfig:
 
 @dataclass
 class TrainConfig:
-    env_id: str = "StelliteTasking-v1"
+    env_id: str = "SatelliteTasking-v1"
     num_workers: int = 1
     train_iters: int = 1
     lr: float = 3e-4
