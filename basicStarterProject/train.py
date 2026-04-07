@@ -4,7 +4,9 @@ from ray.tune.registry import register_env
 from config import EnvConfig, TrainConfig
 from envs import make_env
 
+from datetime import datetime
 import pdb
+import csv
 
 from Basilisk.architecture import bskLogging
 
@@ -40,19 +42,37 @@ def main():
             minibatch_size=train_cfg.minibatch_size,
             num_sgd_iter=train_cfg.num_sgd_iter
         )
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
     )
 
     algo = config.build()
 
+    train_cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    train_cfg.train_log_dir.mkdir(parents=True, exist_ok=True)
+
+    outfilename = train_cfg.train_log_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_train_basicSim.csv"
+    with open(outfilename, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Iteration", "episode_reward_mean", "episode_reward_min", "episode_reward_max", "episode_len_means"])
+
     for i in range(train_cfg.train_iters):
         result = algo.train()
-        print(
-            f"iter={i+1} "
-            f"episode_reward_mean={result.get('episode_reward_mean')}"
-            f"episode_len_means={result.get('episode_len_mean')}"
-        )
+
+        rewardMean = result.get('env_runners').get('episode_return_mean')
+        rewardMin = result.get('env_runners').get('episode_return_min')
+        rewardMax = result.get('env_runners').get('episode_return_max')
+        lenMean = result.get('env_runners').get('episode_len_mean')
+        row = [str(i+1),str(rewardMean),str(rewardMin),str(rewardMax),str(lenMean)]
+
+        with open(outfilename, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+
     
-    checkpoint_dir = algo.save()
+    checkpoint_dir = algo.save(str(train_cfg.checkpoint_dir))
     print(f"Saved checkpoint to: {checkpoint_dir}")
 
 if __name__ == "__main__":

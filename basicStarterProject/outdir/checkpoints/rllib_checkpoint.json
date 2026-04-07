@@ -1,0 +1,1 @@
+{"type": "Algorithm", "checkpoint_version": "1.1", "format": "cloudpickle", "state_file": "C:\\Users\\Logan\\Documents\\ASEN5264\\project\\ASEN5264_BSK_Project\\basicStarterProject\\outdir\\checkpoints\\algorithm_state.pkl", "policy_ids": ["default_policy"], "ray_version": "2.54.1", "ray_commit": "8768a329d23e43f6c6af095b33f64a08ee61cd80"}

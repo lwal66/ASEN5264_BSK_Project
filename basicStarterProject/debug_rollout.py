@@ -11,6 +11,8 @@ def main():
     cfg = EnvConfig()
     env = make_env(cfg)
 
+    
+
     obs, info = env.reset(seed = cfg.seed)
     print("Initial Observation:", obs)
     print("Initial info:", info)
@@ -26,12 +28,13 @@ def main():
     # action 0 = Charge, action 1 = Scan
     done = False
     records = [];
-    while not done and step_count < 20:
-        action = int(step_count % 2)
-        # if step_count == 5 or step_count == 10 :
-        #     action = 0
-        # else:
-        #     action = 1
+    while not done and step_count < 100:
+        #action = int(step_count % 2)
+        if step_count%10 == 0:
+            action = 0
+        else:
+            action = 1
+        #action = 1
 
 
         obs, reward, terminated, truncated, info = env.step(action)
