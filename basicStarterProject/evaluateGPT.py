@@ -86,10 +86,6 @@ def rollout_policy(algo, episodes=5, max_steps=50):
                 "total_reward": total_reward,
                 "terminated": terminated,
                 "truncated": truncated,
-                "battery": next_obs[0],
-                "storage": next_obs[1],
-                "eclipse_start": next_obs[2],
-                "eclipse_end": next_obs[3],
             })
 
             obs = next_obs
@@ -116,32 +112,16 @@ def plot_episode(df_steps, episode, fig, axes):
     ep_df = df_steps[df_steps["episode"] == episode].copy()
 
 
-    axes[0].plot(ep_df["step"], ep_df["battery"], label=f"Episode {episode}")
-    axes[0].set_ylabel("Battery")
-
-    axes[1].plot(ep_df["step"], ep_df["storage"], label=f"Episode {episode}")
-    axes[1].set_ylabel("Storage")
-
-    axes[2].plot(ep_df["step"], ep_df["reward"], label=f"Episode {episode}")
+    axes[0].plot(ep_df["step"], ep_df["reward"], label=f"Episode {episode}")
 #   axes[2].plot(ep_df["step"], ep_df["total_reward"], label="Cumulative Reward")
-    axes[2].set_ylabel("Reward")
-    axes[2].legend()
-
-#   axes[3].plot(ep_df["step"], ep_df["eclipse_start"], label="Eclipse Start")
-    axes[3].plot(ep_df["step"], ep_df["eclipse_end"], label=f"Episode {episode}")
-    axes[3].set_ylabel("Eclipse")
-    axes[3].legend()
-
-    axes[4].step(ep_df["step"], ep_df["action"], label=f"Episode {episode}")
-    axes[4].set_ylabel("Action")
-    axes[4].set_xlabel("Step")
-    axes[4].set_yticks(sorted(ep_df["action"].unique()))
+    axes[0].set_ylabel("Reward")
+    axes[0].legend()
 
     #fig.suptitle(f"Episode {episode}", y=0.995)
 
 
 def main():
-    checkpoint_path = r"C:\Users\mplan\AppData\Local\Temp\tmprhaw2rbc"
+    checkpoint_path = r"=C:\Users\mplan\AppData\Local\Temp\tmpl9w2kqa3"
 
     algo = build_algo_for_eval()
     algo.restore(checkpoint_path)

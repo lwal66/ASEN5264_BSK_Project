@@ -6,4 +6,4 @@ def make_scenario():
     Replace later with mission specific
     """
 
-    return scene.UniformNadirScanning()
+    return scene.CityTargets(250)

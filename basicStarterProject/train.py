@@ -16,7 +16,7 @@ def env_creator(env_config):
 
 def main():
 
-    bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
+    #bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
     train_cfg = TrainConfig()
     env_cfg = EnvConfig()
