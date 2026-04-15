@@ -460,28 +460,55 @@ def eval_rollout(model, device, hp, env_cfg, episodes=5, max_steps=100):
     return pd.DataFrame(all_records), pd.DataFrame(summary_records)
 
 
-def plot_episode(df_steps, episode, fig, axes):
-    """5-panel episode plot matching evaluatePPO.py layout."""
-    ep_df = df_steps[df_steps["episode"] == episode].copy()
+def plot_results(df_steps, title="Post-Training Evaluation"):
+    """
+    Plot evaluation results across all episodes.
+    - Continuous metrics (battery, storage, reward, eclipse): mean +/- std bands
+    - Action: step chart per episode (discrete, mean is not meaningful)
+    """
+    episodes = df_steps["episode"].unique()
 
-    axes[0].plot(ep_df["step"], ep_df["battery"],     label=f"Episode {episode}")
-    axes[0].set_ylabel("Battery")
+    # Truncate all episodes to the same length for band plots
+    min_steps = df_steps.groupby("episode")["step"].count().min()
+    df_trimmed = df_steps[df_steps["step"] < min_steps]
+    steps = sorted(df_trimmed["step"].unique())
 
-    axes[1].plot(ep_df["step"], ep_df["storage"],     label=f"Episode {episode}")
-    axes[1].set_ylabel("Storage")
+    fig, axes = plt.subplots(5, 1, figsize=(10, 8), sharex=True)
+    fig.suptitle(title, fontsize=13)
 
-    axes[2].plot(ep_df["step"], ep_df["reward"],      label=f"Episode {episode}")
-    axes[2].set_ylabel("Reward")
-    axes[2].legend()
+    # ── Continuous metrics: mean ± std bands ──────────────────────────────────
+    band_metrics = [
+        ("battery",     "Battery Fraction", axes[0]),
+        ("storage",     "Storage Fraction", axes[1]),
+        ("reward",      "Reward",           axes[2]),
+        ("eclipse_end", "Eclipse",          axes[3]),
+    ]
+    for col, ylabel, ax in band_metrics:
+        data = np.array([
+            df_trimmed[df_trimmed["episode"] == ep][col].values
+            for ep in episodes
+        ])
+        mean = data.mean(axis=0)
+        std  = data.std(axis=0)
+        ax.plot(steps, mean, linewidth=1.5, label="Mean")
+        ax.fill_between(steps, mean - std, mean + std, alpha=0.25, label="±1 std")
+        ax.set_ylabel(ylabel)
+        ax.legend(fontsize=8, loc="upper right")
 
-    axes[3].plot(ep_df["step"], ep_df["eclipse_end"], label=f"Episode {episode}")
-    axes[3].set_ylabel("Eclipse")
-    axes[3].legend()
-
-    axes[4].step(ep_df["step"], ep_df["action"],      label=f"Episode {episode}")
+    # ── Action: step chart per episode ────────────────────────────────────────
+    for ep in episodes:
+        ep_df = df_steps[df_steps["episode"] == ep]
+        axes[4].step(ep_df["step"], ep_df["action"],
+                     where="post", alpha=0.6, label=f"Ep {ep}")
     axes[4].set_ylabel("Action")
     axes[4].set_xlabel("Step")
-    axes[4].set_yticks(sorted(ep_df["action"].unique()))
+    axes[4].set_yticks(sorted(df_steps["action"].unique()))
+    axes[4].set_yticklabels([ACTION_NAMES.get(a, str(a))
+                             for a in sorted(df_steps["action"].unique())])
+    axes[4].legend(fontsize=8, loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
 
 
 # ---------------------------------------------------------------------------
@@ -602,12 +629,7 @@ def train(hp: PPOHyperparams | None = None):
     print("\nEpisode summary:")
     print(df_summary.to_string(index=False))
 
-    fig, axes = plt.subplots(5, 1, figsize=(10, 8), sharex=True)
-    for ep in df_summary["episode"]:
-        plot_episode(df_steps, ep, fig, axes)
-    fig.suptitle("Post-Training Evaluation", y=1.01)
-    plt.tight_layout()
-    plt.show()
+    plot_results(df_steps, title="Custom PPO — Post-Training Evaluation")
 
     return model, csv_path
 
