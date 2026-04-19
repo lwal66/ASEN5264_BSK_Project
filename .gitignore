@@ -1,2 +1,4 @@
-basicStarterProject/__pycache__/
-basicStarterProject/outdir/
+basicStarterProject/outdir/*
+*.pyc
+__pycache__/
+
