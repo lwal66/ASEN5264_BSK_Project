@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
@@ -34,48 +33,13 @@ from torch.distributions import Categorical
 
 from Basilisk.architecture import bskLogging
 
-from config import EnvConfig, TrainConfig
+from config import EnvConfig, TrainConfig, PPOConfig
 from envs import make_env
 
 ACTION_NAMES = {
     0: "Charge",
-    1: "Scan",
+    1: "Image",
 }
-
-
-# ---------------------------------------------------------------------------
-# Hyperparameter dataclass
-# ---------------------------------------------------------------------------
-
-@dataclass
-class PPOHyperparams:
-    # ── Network ──────────────────────────────────────────────────────────────
-    hidden_sizes: List[int] = field(default_factory=lambda: [64, 64])
-
-    # ── Rollout ───────────────────────────────────────────────────────────────
-    # steps_per_iter: int = 2048   # total env steps collected per PPO iteration
-    steps_per_iter: int = 512   # total env steps collected per PPO iteration
-    max_ep_steps:   int = 100    # hard cap per episode inside a rollout
-
-    # ── GAE ───────────────────────────────────────────────────────────────────
-    gamma:  float = 0.99   # discount factor
-    lam:    float = 0.95   # GAE-λ smoothing parameter
-
-    # ── PPO optimisation ──────────────────────────────────────────────────────
-    lr:             float = 3e-4
-    n_epochs:       int   = 10    # SGD passes over one batch of experience
-    minibatch_size: int   = 64
-    clip_eps:       float = 0.2   # ε for clipped surrogate loss
-    vf_coef:        float = 0.5   # value-loss coefficient
-    ent_coef:       float = 0.01  # entropy bonus coefficient
-    clip_vf_loss:   bool  = True  # also clip the value function loss
-    max_grad_norm:  float = 0.5   # gradient clipping
-
-    # ── Training loop ─────────────────────────────────────────────────────────
-    # train_iters:      int = 50
-    train_iters:      int = 30
-    seed:             int = 42
-    checkpoint_every: int = 10    # save model every N iterations
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +190,9 @@ class RolloutBuffer:
 def collect_rollout(
     env,
     model: ActorCritic,
-    hp: PPOHyperparams,
+    hp: PPOConfig,
     device: torch.device,
+    env_cfg: EnvConfig,
     seed_offset: int = 0,
 ) -> Tuple[RolloutBuffer, dict]:
     """
@@ -246,7 +211,7 @@ def collect_rollout(
     ep_reward    = 0.0
     ep_len       = 0
 
-    obs_np, _ = env.reset(seed=hp.seed + seed_offset)
+    obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset)
 
     for _ in range(hp.steps_per_iter):
         obs_t = torch.as_tensor(obs_np, dtype=torch.float32).unsqueeze(0).to(device)
@@ -257,7 +222,12 @@ def collect_rollout(
             log_prob    = dist.log_prob(action)
 
         action_int = action.item()
-        next_obs_np, reward, terminated, truncated, _ = env.step(action_int)
+        try:
+            next_obs_np, reward, terminated, truncated, _ = env.step(action_int)
+        except RuntimeError:
+            # Battery failure corrupts BSK-RL internal state — reset and move on
+            next_obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset + len(ep_rewards))
+            reward, terminated, truncated = 0.0, True, False
         done = terminated or truncated
 
         buffer.add(
@@ -278,7 +248,7 @@ def collect_rollout(
             ep_lengths.append(ep_len)
             ep_reward = 0.0
             ep_len    = 0
-            obs_np, _ = env.reset()
+            obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset + len(ep_rewards))
 
     # Bootstrap value for the last (possibly incomplete) episode
     with torch.no_grad():
@@ -309,7 +279,7 @@ def ppo_update(
     model:     ActorCritic,
     optimizer: optim.Optimizer,
     buffer:    RolloutBuffer,
-    hp:        PPOHyperparams,
+    hp:        PPOConfig,
     device:    torch.device,
 ) -> dict:
     """
@@ -429,7 +399,7 @@ def eval_rollout(model, device, hp, env_cfg, episodes=5, max_steps=100):
             total_reward += float(reward)
             done = terminated or truncated
 
-            all_records.append({
+            record = {
                 "episode":      ep,
                 "step":         step,
                 "action":       action,
@@ -440,9 +410,11 @@ def eval_rollout(model, device, hp, env_cfg, episodes=5, max_steps=100):
                 "truncated":    truncated,
                 "battery":      float(next_obs[0]),
                 "storage":      float(next_obs[1]),
-                "eclipse_start": float(next_obs[2]),
-                "eclipse_end":   float(next_obs[3]),
-            })
+            }
+            # Store remaining obs generically
+            for i in range(2, len(next_obs)):
+                record[f"obs_{i}"] = float(next_obs[i])
+            all_records.append(record)
 
             obs_np = next_obs
             step  += 1
@@ -473,15 +445,14 @@ def plot_results(df_steps, title="Post-Training Evaluation"):
     df_trimmed = df_steps[df_steps["step"] < min_steps]
     steps = sorted(df_trimmed["step"].unique())
 
-    fig, axes = plt.subplots(5, 1, figsize=(10, 8), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(10, 7), sharex=True)
     fig.suptitle(title, fontsize=13)
 
     # ── Continuous metrics: mean ± std bands ──────────────────────────────────
     band_metrics = [
-        ("battery",     "Battery Fraction", axes[0]),
-        ("storage",     "Storage Fraction", axes[1]),
-        ("reward",      "Reward",           axes[2]),
-        ("eclipse_end", "Eclipse",          axes[3]),
+        ("battery",  "Battery Fraction", axes[0]),
+        ("storage",  "Storage Fraction", axes[1]),
+        ("reward",   "Reward",           axes[2]),
     ]
     for col, ylabel, ax in band_metrics:
         data = np.array([
@@ -498,14 +469,14 @@ def plot_results(df_steps, title="Post-Training Evaluation"):
     # ── Action: step chart per episode ────────────────────────────────────────
     for ep in episodes:
         ep_df = df_steps[df_steps["episode"] == ep]
-        axes[4].step(ep_df["step"], ep_df["action"],
+        axes[3].step(ep_df["step"], ep_df["action"],
                      where="post", alpha=0.6, label=f"Ep {ep}")
-    axes[4].set_ylabel("Action")
-    axes[4].set_xlabel("Step")
-    axes[4].set_yticks(sorted(df_steps["action"].unique()))
-    axes[4].set_yticklabels([ACTION_NAMES.get(a, str(a))
+    axes[3].set_ylabel("Action")
+    axes[3].set_xlabel("Step")
+    axes[3].set_yticks(sorted(df_steps["action"].unique()))
+    axes[3].set_yticklabels([ACTION_NAMES.get(a, str(a))
                              for a in sorted(df_steps["action"].unique())])
-    axes[4].legend(fontsize=8, loc="upper right")
+    axes[3].legend(fontsize=8, loc="upper right")
 
     plt.tight_layout()
     plt.show()
@@ -515,9 +486,9 @@ def plot_results(df_steps, title="Post-Training Evaluation"):
 # Training loop
 # ---------------------------------------------------------------------------
 
-def train(hp: PPOHyperparams | None = None):
+def train(hp: PPOConfig | None = None):
     if hp is None:
-        hp = PPOHyperparams()
+        hp = PPOConfig()
 
     bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
@@ -528,7 +499,7 @@ def train(hp: PPOHyperparams | None = None):
     print(f"Using device: {device}")
 
     # ── Environment ───────────────────────────────────────────────────────────
-    env_cfg = EnvConfig(seed=hp.seed)
+    env_cfg = EnvConfig()  # seed comes from EnvConfig, not PPOConfig
     env     = make_env(env_cfg)
 
     obs_dim = env.observation_space.shape[0]
@@ -572,6 +543,7 @@ def train(hp: PPOHyperparams | None = None):
             model      = model,
             hp         = hp,
             device     = device,
+            env_cfg    = env_cfg,
             seed_offset = iteration,
         )
 
@@ -638,7 +610,7 @@ def train(hp: PPOHyperparams | None = None):
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def parse_args() -> PPOHyperparams:
+def parse_args() -> PPOConfig:
     parser = argparse.ArgumentParser(description="Train PPO on BSK-RL spacecraft env")
     parser.add_argument("--iters",          type=int,   default=50,    help="Training iterations")
     parser.add_argument("--steps",          type=int,   default=2048,  help="Steps per iteration")
@@ -649,11 +621,11 @@ def parse_args() -> PPOHyperparams:
     parser.add_argument("--n-epochs",       type=int,   default=10,    help="SGD epochs per iter")
     parser.add_argument("--minibatch",      type=int,   default=64,    help="Minibatch size")
     parser.add_argument("--ent-coef",       type=float, default=0.01,  help="Entropy bonus")
-    parser.add_argument("--seed",           type=int,   default=42,    help="Random seed")
+    parser.add_argument("--seed",           type=int,   default=1,     help="Random seed")
     parser.add_argument("--no-clip-vf",     action="store_true",       help="Disable VF loss clipping")
     args = parser.parse_args()
 
-    return PPOHyperparams(
+    return PPOConfig(
         train_iters     = args.iters,
         steps_per_iter  = args.steps,
         lr              = args.lr,
