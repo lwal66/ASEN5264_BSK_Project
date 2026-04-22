@@ -1,0 +1,4 @@
+basicStarterProject/outdir/*
+*.pyc
+__pycache__/
+

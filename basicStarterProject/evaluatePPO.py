@@ -1,6 +1,7 @@
 from Basilisk.architecture import bskLogging
 bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
+from pathlib import Path
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 
-from config import EnvConfig
+from config import EnvConfig, TrainConfig
 from envs import make_env
 
 import pdb
@@ -120,20 +121,41 @@ def plot_episode(df_steps, episode, fig, axes):
     #fig.suptitle(f"Episode {episode}", y=0.995)
 
 
+def find_latest_checkpoint(checkpoint_dir):
+    checkpoint_dir = Path(checkpoint_dir)
+
+    # Case 1: checkpoint files are directly in checkpoint_dir (flat structure)
+    if (checkpoint_dir / "rllib_checkpoint.json").exists():
+        return checkpoint_dir
+
+    # Case 2: RLlib created numbered subfolders e.g. checkpoint_000025
+    candidates = sorted(checkpoint_dir.glob("checkpoint_*"))
+    if candidates:
+        return candidates[-1]
+
+    raise FileNotFoundError(
+        f"No checkpoint found in {checkpoint_dir}.\nRun train.py first."
+    )
+
+
 def main():
-    checkpoint_path = r"=C:\Users\mplan\AppData\Local\Temp\tmpl9w2kqa3"
+    cfg = TrainConfig()
+    cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    cfg.eval_dir.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_path = find_latest_checkpoint(cfg.checkpoint_dir)
+    print(f"Restoring from checkpoint: #{checkpoint_path}")
 
     algo = build_algo_for_eval()
-    algo.restore(checkpoint_path)
+    algo.restore(str(cfg.checkpoint_dir))
 
     df_steps, df_summary = rollout_policy(algo, episodes=5, max_steps=100)
 
     print("\nEpisode summary:")
     print(df_summary)
 
-    os.makedirs("eval_outputs", exist_ok=True)
-    df_steps.to_csv("eval_outputs/eval_steps.csv", index=False)
-    df_summary.to_csv("eval_outputs/eval_summary.csv", index=False)
+    df_steps.to_csv(cfg.eval_dir / "eval_steps.csv", index=False)
+    df_summary.to_csv(cfg.eval_dir / "eval_summary.csv", index=False)
 
     fig, axes = plt.subplots(5, 1, figsize=(10, 6), sharex=True)
     for ep in df_summary["episode"]:

@@ -1,14 +1,18 @@
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
+import ray
 
 from config import EnvConfig, TrainConfig
 from envs import make_env
 
 from datetime import datetime
-import pdb
 import csv
+from pathlib import Path
 
 from Basilisk.architecture import bskLogging
+
+# Project root — passed to Ray workers so they can import config, envs, etc.
+PROJECT_ROOT = str(Path(__file__).resolve().parent)
 
 def env_creator(env_config):
     cfg = EnvConfig(**env_config) if env_config else EnvConfig()
@@ -17,6 +21,9 @@ def env_creator(env_config):
 def main():
 
     #bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
+
+    # Initialise Ray with the project directory on each worker's Python path
+    ray.init(runtime_env={"env_vars": {"PYTHONPATH": PROJECT_ROOT}})
 
     train_cfg = TrainConfig()
     env_cfg = EnvConfig()
@@ -40,7 +47,7 @@ def main():
             gamma=train_cfg.gamma,
             train_batch_size=train_cfg.train_batch_size,
             minibatch_size=train_cfg.minibatch_size,
-            num_sgd_iter=train_cfg.num_sgd_iter
+            num_epochs=train_cfg.num_sgd_iter
         )
         .api_stack(
             enable_rl_module_and_learner=False,
@@ -50,7 +57,10 @@ def main():
 
     algo = config.build()
 
-    outfilename = f"outdir\{datetime.now().strftime('%Y%m%d_%H%M%S')}_train_basicSim.csv"
+    train_cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    train_cfg.train_log_dir.mkdir(parents=True, exist_ok=True)
+
+    outfilename = train_cfg.train_log_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_train_basicSim.csv"
     with open(outfilename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Iteration", "episode_reward_mean", "episode_reward_min", "episode_reward_max", "episode_len_means"])
@@ -69,7 +79,7 @@ def main():
             writer.writerow(row)
 
     
-    checkpoint_dir = algo.save()
+    checkpoint_dir = algo.save(str(train_cfg.checkpoint_dir))
     print(f"Saved checkpoint to: {checkpoint_dir}")
 
 if __name__ == "__main__":
