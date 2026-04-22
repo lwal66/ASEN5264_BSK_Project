@@ -45,7 +45,7 @@ def make_satellite(name: str = "EO1") -> StarterCityImagingSatellite:
         oe=lambda: random_circular_orbit(alt=500),
         batteryStorageCapacity=battery_capacity,
         storedCharge_Init=lambda: battery_capacity * np.random.uniform(0.4, 0.9),
-        basePowerDraw=-10.0,
+        basePowerDraw=-20.0,
         instrumentPowerDraw=-50.0,
         dataStorageCapacity=200 * 8e6 * 100,
         # Required by CityTargets for access window computation

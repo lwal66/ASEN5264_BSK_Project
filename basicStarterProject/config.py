@@ -35,7 +35,7 @@ class PPOConfig:
     hidden_sizes:     list = None   # set in __post_init__
 
     # ── Rollout ───────────────────────────────────────────────────────────────
-    steps_per_iter:   int   = 2048  # env steps collected per iteration
+    steps_per_iter:   int   = 512  # env steps collected per iteration
     max_ep_steps:     int   = 200   # hard cap per episode inside a rollout
 
     # ── GAE ───────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ class PPOConfig:
     max_grad_norm:    float = 0.5   # gradient clipping
 
     # ── Training loop ─────────────────────────────────────────────────────────
-    train_iters:      int   = 50
+    train_iters:      int   = 10
     seed:             int   = 1     # matches EnvConfig.seed
     checkpoint_every: int   = 10    # save a checkpoint every N iterations
 
