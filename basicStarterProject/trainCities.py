@@ -1,15 +1,18 @@
 from Basilisk.architecture import bskLogging
 bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
-import os
+import csv
+import ray
 import pandas as pd
+from datetime import datetime
+from pathlib import Path
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 
-from config import EnvConfig
+from config import EnvConfig, CitiesConfig
 from envs import make_env
 
-import pdb
+PROJECT_ROOT = str(Path(__file__).resolve().parent)
 
 def env_creator(env_config):
     cfg = EnvConfig(**env_config) if env_config else EnvConfig()
@@ -17,9 +20,12 @@ def env_creator(env_config):
 
 
 def main():
-    cfg = EnvConfig()
+    ray.init(runtime_env={"env_vars": {"PYTHONPATH": PROJECT_ROOT}})
 
-    register_env("bsk_rl_city_targets_env", env_creator)
+    env_cfg    = EnvConfig()
+    cities_cfg = CitiesConfig()
+
+    register_env(cities_cfg.env_name, env_creator)
 
     config = (
         PPOConfig()
@@ -28,29 +34,29 @@ def main():
             enable_env_runner_and_connector_v2=False,
         )
         .environment(
-            env="bsk_rl_city_targets_env",
+            env=cities_cfg.env_name,
             env_config={
-                "satellite_name": cfg.satellite_name,
-                "episode_time_limit_s": cfg.episode_time_limit_s,
-                "seed": cfg.seed,
+                "satellite_name":       env_cfg.satellite_name,
+                "episode_time_limit_s": env_cfg.episode_time_limit_s,
+                "seed":                 env_cfg.seed,
             },
             disable_env_checking=False,
         )
         .framework("torch")
         .env_runners(
-            num_env_runners=4,
-            sample_timeout_s=1200.0,
+            num_env_runners=cities_cfg.num_workers,
+            sample_timeout_s=cities_cfg.sample_timeout_s,
             rollout_fragment_length="auto",
         )
         .training(
-            lr=3e-4,
-            gamma=0.99,
-            train_batch_size=1000,
-            minibatch_size=256,
-            num_sgd_iter=10,
+            lr=cities_cfg.lr,
+            gamma=cities_cfg.gamma,
+            train_batch_size=cities_cfg.train_batch_size,
+            minibatch_size=cities_cfg.minibatch_size,
+            num_epochs=cities_cfg.num_sgd_iter,
             model={
-                "fcnet_hiddens": [256, 256],
-                "fcnet_activation": "tanh",
+                "fcnet_hiddens":    list(cities_cfg.hidden_sizes),
+                "fcnet_activation": cities_cfg.activation,
             },
         )
         .reporting(
@@ -63,9 +69,15 @@ def main():
 
     algo = config.build()
 
+    cities_cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    cities_cfg.train_log_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path  = cities_cfg.train_log_dir / f"{timestamp}_cities_train.csv"
+
     history = []
 
-    for i in range(40):
+    for i in range(cities_cfg.train_iters):
         result = algo.train()
 
         envm = result.get("env_runners", {})
@@ -103,13 +115,12 @@ def main():
         #     f"iter_time={row['iter_time_s']:.2f}s"
         # )
 
-    os.makedirs("training_outputs_powerDraw", exist_ok=True)
-
     df = pd.DataFrame(history)
-    df.to_csv("training_outputs_powerDraw/train_history.csv", index=False)
+    df.to_csv(csv_path, index=False)
 
-    checkpoint_dir = algo.save()
-    print(f"Saved checkpoint to: {checkpoint_dir}")
+    checkpoint_path = algo.save(str(cities_cfg.checkpoint_dir))
+    print(f"Saved checkpoint to: {checkpoint_path}")
+    print(f"Training log saved to: {csv_path}")
 
     print("\nTraining history:")
     print(df)

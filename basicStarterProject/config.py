@@ -35,7 +35,7 @@ class PPOConfig:
     hidden_sizes:     list = None   # set in __post_init__
 
     # ── Rollout ───────────────────────────────────────────────────────────────
-    steps_per_iter:   int   = 512  # env steps collected per iteration
+    steps_per_iter:   int   = 2048  # env steps collected per iteration
     max_ep_steps:     int   = 200   # hard cap per episode inside a rollout
 
     # ── GAE ───────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ class PPOConfig:
     max_grad_norm:    float = 0.5   # gradient clipping
 
     # ── Training loop ─────────────────────────────────────────────────────────
-    train_iters:      int   = 10
+    train_iters:      int   = 20
     seed:             int   = 1     # matches EnvConfig.seed
     checkpoint_every: int   = 10    # save a checkpoint every N iterations
 
@@ -65,3 +65,24 @@ class PPOConfig:
     def __post_init__(self):
         if self.hidden_sizes is None:
             self.hidden_sizes = [64, 64]
+
+@dataclass
+class CitiesConfig:
+    # ── RLlib settings ────────────────────────────────────────────────────────
+    env_name:         str   = "bsk_rl_city_targets_env"
+    num_workers:      int   = 4
+    train_iters:      int   = 40
+    lr:               float = 3e-4
+    gamma:            float = 0.99
+    train_batch_size: int   = 1000
+    minibatch_size:   int   = 256
+    num_sgd_iter:     int   = 10
+    sample_timeout_s: float = 1200.0
+    hidden_sizes:     tuple = (256, 256)
+    activation:       str   = "tanh"
+
+    # ── Output paths ──────────────────────────────────────────────────────────
+    checkpoint_dir: Path = _OUTDIR_ / "cities" / "checkpoints"
+    train_log_dir:  Path = _OUTDIR_ / "cities" / "train_logs"
+    eval_dir:       Path = _OUTDIR_ / "cities" / "eval_outputs"
+    compare_dir:    Path = _OUTDIR_ / "cities" / "comparison"

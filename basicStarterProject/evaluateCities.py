@@ -1,16 +1,18 @@
 from Basilisk.architecture import bskLogging
 bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
-import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 
-from config import EnvConfig
+from config import EnvConfig, CitiesConfig
 from envs import make_env
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent)
 
 
 def env_creator(env_config):
@@ -18,10 +20,22 @@ def env_creator(env_config):
     return make_env(cfg)
 
 
-def build_algo():
-    cfg = EnvConfig()
+def find_latest_checkpoint(checkpoint_dir):
+    checkpoint_dir = Path(checkpoint_dir)
+    if (checkpoint_dir / "rllib_checkpoint.json").exists():
+        return checkpoint_dir
+    candidates = sorted(checkpoint_dir.glob("checkpoint_*"))
+    if candidates:
+        return candidates[-1]
+    raise FileNotFoundError(
+        f"No checkpoint found in {checkpoint_dir}.\nRun trainCities.py first."
+    )
 
-    register_env("bsk_rl_city_targets_env", env_creator)
+
+def build_algo(cities_cfg: CitiesConfig):
+    env_cfg = EnvConfig()
+
+    register_env(cities_cfg.env_name, env_creator)
 
     config = (
         PPOConfig()
@@ -30,28 +44,28 @@ def build_algo():
             enable_env_runner_and_connector_v2=False,
         )
         .environment(
-            env="bsk_rl_city_targets_env",
+            env=cities_cfg.env_name,
             env_config={
-                "satellite_name": cfg.satellite_name,
-                "episode_time_limit_s": cfg.episode_time_limit_s,
-                "seed": cfg.seed,
+                "satellite_name":       env_cfg.satellite_name,
+                "episode_time_limit_s": env_cfg.episode_time_limit_s,
+                "seed":                 env_cfg.seed,
             },
             disable_env_checking=False,
         )
         .framework("torch")
         .env_runners(
-            num_env_runners=0,   # no remote workers for local evaluation
+            num_env_runners=0,
             rollout_fragment_length="auto",
         )
         .training(
-            lr=3e-4,
-            gamma=0.99,
-            train_batch_size=1000,
-            minibatch_size=256,
-            num_sgd_iter=2,
+            lr=cities_cfg.lr,
+            gamma=cities_cfg.gamma,
+            train_batch_size=cities_cfg.train_batch_size,
+            minibatch_size=cities_cfg.minibatch_size,
+            num_epochs=cities_cfg.num_sgd_iter,
             model={
-                "fcnet_hiddens": [256, 256],
-                "fcnet_activation": "tanh",
+                "fcnet_hiddens":    list(cities_cfg.hidden_sizes),
+                "fcnet_activation": cities_cfg.activation,
             },
         )
         .resources(num_gpus=0)
@@ -174,37 +188,28 @@ def plot_episode(df_steps, episode, outdir):
 
 
 def main():
-    # Replace this with your actual checkpoint path
-    checkpoint_path = r"C:\Users\mplan\AppData\Local\Temp\tmphvb3u6tv"
+    ray.init(runtime_env={"env_vars": {"PYTHONPATH": PROJECT_ROOT}})
 
-    episodes = 5
-    max_steps = 1000
+    cities_cfg = CitiesConfig()
+    cities_cfg.eval_dir.mkdir(parents=True, exist_ok=True)
 
-    algo = build_algo()
-    algo.restore(checkpoint_path)
+    checkpoint_path = find_latest_checkpoint(cities_cfg.checkpoint_dir)
+    print(f"Restoring from checkpoint: {checkpoint_path}")
 
-    df_steps, df_summary = rollout_policy(
-        algo=algo,
-        episodes=episodes,
-        max_steps=max_steps,
-    )
+    algo = build_algo(cities_cfg)
+    algo.restore(str(checkpoint_path))
 
-    outdir = Path("evaluation_outputs")
-    outdir.mkdir(parents=True, exist_ok=True)
+    df_steps, df_summary = rollout_policy(algo=algo, episodes=5, max_steps=1000)
 
-    df_steps.to_csv(outdir / "eval_steps.csv", index=False)
-    df_summary.to_csv(outdir / "eval_summary.csv", index=False)
-
-    for ep in sorted(df_summary["episode"].unique()):
-        plot_episode(df_steps, ep, outdir)
+    df_steps.to_csv(cities_cfg.eval_dir / "eval_steps.csv", index=False)
+    df_summary.to_csv(cities_cfg.eval_dir / "eval_summary.csv", index=False)
 
     print("\nEvaluation summary:")
-    print(df_summary)
-    print("\nSaved files:")
-    print(outdir / "eval_steps.csv")
-    print(outdir / "eval_summary.csv")
+    print(df_summary.to_string(index=False))
+
+    print("\nGenerating episode plots...")
     for ep in sorted(df_summary["episode"].unique()):
-        print(outdir / f"episode_{ep:02d}.png")
+        plot_episode(df_steps, ep, cities_cfg.eval_dir)
 
 
 if __name__ == "__main__":

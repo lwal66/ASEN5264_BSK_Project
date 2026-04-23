@@ -4,14 +4,14 @@ bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 from pathlib import Path
 
 import pandas as pd
+import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 
-from config import EnvConfig
+from config import EnvConfig, CitiesConfig
 from envs import make_env
 
-
-ENV_NAME = "bsk_rl_city_targets_env"
+PROJECT_ROOT = str(Path(__file__).resolve().parent)
 
 
 def env_creator(env_config):
@@ -19,10 +19,22 @@ def env_creator(env_config):
     return make_env(cfg)
 
 
-def build_algo():
-    cfg = EnvConfig()
+def find_latest_checkpoint(checkpoint_dir):
+    checkpoint_dir = Path(checkpoint_dir)
+    if (checkpoint_dir / "rllib_checkpoint.json").exists():
+        return checkpoint_dir
+    candidates = sorted(checkpoint_dir.glob("checkpoint_*"))
+    if candidates:
+        return candidates[-1]
+    raise FileNotFoundError(
+        f"No checkpoint found in {checkpoint_dir}.\nRun trainCities.py first."
+    )
 
-    register_env(ENV_NAME, env_creator)
+
+def build_algo(cities_cfg: CitiesConfig):
+    env_cfg = EnvConfig()
+
+    register_env(cities_cfg.env_name, env_creator)
 
     config = (
         PPOConfig()
@@ -31,11 +43,11 @@ def build_algo():
             enable_env_runner_and_connector_v2=False,
         )
         .environment(
-            env=ENV_NAME,
+            env=cities_cfg.env_name,
             env_config={
-                "satellite_name": cfg.satellite_name,
-                "episode_time_limit_s": cfg.episode_time_limit_s,
-                "seed": cfg.seed,
+                "satellite_name":       env_cfg.satellite_name,
+                "episode_time_limit_s": env_cfg.episode_time_limit_s,
+                "seed":                 env_cfg.seed,
             },
             disable_env_checking=False,
         )
@@ -45,14 +57,14 @@ def build_algo():
             rollout_fragment_length="auto",
         )
         .training(
-            lr=3e-4,
-            gamma=0.99,
-            train_batch_size=1000,
-            minibatch_size=256,
-            num_sgd_iter=2,
+            lr=cities_cfg.lr,
+            gamma=cities_cfg.gamma,
+            train_batch_size=cities_cfg.train_batch_size,
+            minibatch_size=cities_cfg.minibatch_size,
+            num_epochs=cities_cfg.num_sgd_iter,
             model={
-                "fcnet_hiddens": [256, 256],
-                "fcnet_activation": "tanh",
+                "fcnet_hiddens":    list(cities_cfg.hidden_sizes),
+                "fcnet_activation": cities_cfg.activation,
             },
         )
         .resources(num_gpus=0)
@@ -193,44 +205,39 @@ def print_comparison(summary_df):
 
 
 def main():
-    checkpoint_path = r"C:\Users\mplan\AppData\Local\Temp\tmphvb3u6tv"
-    episodes = 20
-    max_steps = 1000
-
-    algo = build_algo()
-    algo.restore(checkpoint_path)
-
-    trained_steps, trained_episodes = rollout_policy(
-        policy_type="trained",
-        episodes=episodes,
-        max_steps=max_steps,
-        algo=algo,
-    )
+    # Random rollout runs BEFORE ray.init to avoid BSK-RL access-checking issues
+    print("Running random policy rollout...")
+    cities_cfg = CitiesConfig()
+    cities_cfg.compare_dir.mkdir(parents=True, exist_ok=True)
 
     random_steps, random_episodes = rollout_policy(
-        policy_type="random",
-        episodes=episodes,
-        max_steps=max_steps,
-        algo=None,
+        policy_type="random", episodes=20, max_steps=1000, algo=None,
     )
 
-    df_steps = pd.concat([trained_steps, random_steps], ignore_index=True)
+    # Now initialise Ray and restore trained policy
+    ray.init(runtime_env={"env_vars": {"PYTHONPATH": PROJECT_ROOT}})
+
+    checkpoint_path = find_latest_checkpoint(cities_cfg.checkpoint_dir)
+    print(f"\nRestoring from checkpoint: {checkpoint_path}")
+
+    algo = build_algo(cities_cfg)
+    algo.restore(str(checkpoint_path))
+
+    print("\nRunning trained policy rollout...")
+    trained_steps, trained_episodes = rollout_policy(
+        policy_type="trained", episodes=20, max_steps=1000, algo=algo,
+    )
+
+    df_steps    = pd.concat([trained_steps,    random_steps],    ignore_index=True)
     df_episodes = pd.concat([trained_episodes, random_episodes], ignore_index=True)
-    df_summary = summarize_by_policy(df_episodes)
+    df_summary  = summarize_by_policy(df_episodes)
 
-    outdir = Path("comparison_outputs")
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    df_steps.to_csv(outdir / "policy_steps.csv", index=False)
-    df_episodes.to_csv(outdir / "policy_episodes.csv", index=False)
-    df_summary.to_csv(outdir / "policy_summary.csv", index=False)
+    df_steps.to_csv(cities_cfg.compare_dir / "policy_steps.csv",    index=False)
+    df_episodes.to_csv(cities_cfg.compare_dir / "policy_episodes.csv", index=False)
+    df_summary.to_csv(cities_cfg.compare_dir / "policy_summary.csv",  index=False)
 
     print_comparison(df_summary)
-
-    print("\nSaved files:")
-    print(outdir / "policy_steps.csv")
-    print(outdir / "policy_episodes.csv")
-    print(outdir / "policy_summary.csv")
+    print(f"\nSaved comparison outputs to: {cities_cfg.compare_dir}")
 
 
 if __name__ == "__main__":

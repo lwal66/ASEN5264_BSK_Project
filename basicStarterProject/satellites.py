@@ -53,6 +53,8 @@ def make_satellite(name: str = "EO1") -> StarterCityImagingSatellite:
         # Required by SteeringImagerFSWModel
         imageAttErrorRequirement=0.01,
         imageRateErrorRequirement=0.01,
+        # Atmospheric drag (LEO at 500km altitude)
+        dragCoeff=2.2,          # drag coefficient (dimensionless)
         # Attitude control
         u_max=0.4,
         K1=0.25,
