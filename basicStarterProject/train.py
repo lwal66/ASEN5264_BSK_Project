@@ -20,7 +20,7 @@ def env_creator(env_config):
 
 def main():
 
-    bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
+    #bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
 
     # Initialise Ray with the project directory on each worker's Python path
     ray.init(runtime_env={"env_vars": {"PYTHONPATH": PROJECT_ROOT}})

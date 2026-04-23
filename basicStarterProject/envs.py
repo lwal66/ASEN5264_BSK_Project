@@ -3,6 +3,7 @@ import numpy as np
 
 from config import EnvConfig
 from rewards import make_rewarder
+#from rewards import MyRewarder
 from satellites import make_satellite
 from scenarios import make_scenario
 

@@ -7,7 +7,7 @@ _OUTDIR_ = Path(__file__).resolve().parent / "outdir"
 @dataclass
 class EnvConfig:
     satellite_name: str = "EO1"
-    episode_time_limit_s: float = 3*60*60
+    episode_time_limit_s: float = 5*60*60
     seed: int = 1
     #seed: int = int(time.time())
 

@@ -1,6 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import pdb
 from config import EnvConfig
 from envs import make_env
 from Basilisk.architecture import bskLogging
@@ -17,10 +17,12 @@ def main():
     print("Initial Observation:", obs)
     print("Initial info:", info)
 
+    #pdb.set_trace()
+
     total_reward = 0.0
     step_count = 0
 
-
+    print(env.action_space)
     
     # Dumb hand-coded policy:
     # alternate between charge and scan
@@ -29,13 +31,8 @@ def main():
     done = False
     records = [];
     while not done and step_count < 100:
-        #action = int(step_count % 2)
-        if step_count%10 == 0:
-            action = 0
-        else:
-            action = 1
-        #action = 1
-
+        action = env.action_space.sample()
+        print("Random Action", action)
 
         obs, reward, terminated, truncated, info = env.step(action)
 
@@ -43,17 +40,15 @@ def main():
         step_count += 1
         done = terminated or truncated
 
+        
         records.append({
             "step": step_count,
             "action": action,
+            "charge": obs[0],
             "reward": reward,
             "total_reward": total_reward,
             "terminated": terminated,
             "truncated": truncated,
-            "battery": obs[0],
-            "storage": obs[1],
-            "eclipse_start": obs[2],
-            "eclipse_end": obs[3]
         })
 
     print(f"\nFinished after {step_count} steps")
@@ -64,23 +59,16 @@ def main():
     df = pd.DataFrame(records)
     print(df)
 
-    fig, axes = plt.subplots(5, 1, figsize=(10,8), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(10,8), sharex=True)
     axes[0].plot(df["step"], df["action"])
     axes[0].set_ylabel("Action")
 
-    axes[1].plot(df["step"], df["battery"])
-    axes[1].set_ylabel("Battery")
+    axes[1].plot(df["step"], df["reward"], label='Reward')
+    axes[1].plot(df["step"], df["total_reward"], label='Cumulative Reward')
+    axes[1].set_ylabel("Reward")
 
-    axes[2].plot(df["step"], df["storage"])
-    axes[2].set_ylabel("Storage")
-
-    axes[3].plot(df["step"], df["reward"], label='Reward')
-    axes[3].plot(df["step"], df["total_reward"], label='Cumulative Reward')
-    axes[3].set_ylabel("Reward")
-
-    axes[4].plot(df["step"], df["eclipse_start"], label='eclipse_start')
-    axes[4].plot(df["step"], df["eclipse_end"], label='eclipse_end')
-    axes[4].set_ylabel("Eclipse start and end")
+    axes[2].plot(df["step"], df["charge"])
+    axes[2].set_ylabel("Charge")
 
     plt.tight_layout()
     plt.show()
