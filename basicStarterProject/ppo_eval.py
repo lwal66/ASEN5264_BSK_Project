@@ -37,6 +37,7 @@ from ppo import ActorCritic, ACTION_NAMES
 from config import EnvConfig, PPOConfig, TrainConfig
 from envs import make_env
 
+import pdb
 
 # ---------------------------------------------------------------------------
 # Checkpoint loading
@@ -108,7 +109,13 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 action      = dist.probs.argmax(dim=-1).item()  # greedy
 
             try:
-                next_obs, reward, terminated, truncated, _ = env.step(action)
+                next_obs, reward, terminated, truncated, info = env.step(action)
+                #print(info.get("time"))
+                #print(info.get("simulation_time"))
+                #print(info.get("currentTime"))
+                #print(info.get("dt"))
+                #print(info.get("duration"))
+                #pdb.set_trace()
             except RuntimeError:
                 # Battery failure — treat as terminal with zero reward
                 next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
@@ -119,21 +126,74 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
+            # record = {
+            #     "episode":      ep,
+            #     "step":         step,
+            #     "action":       action,
+            #     "action_name":  ACTION_NAMES.get(action, str(action)),
+            #     "reward":       float(reward),
+            #     "total_reward": total_reward,
+            #     "terminated":   terminated,
+            #     "truncated":    truncated,
+            #     "battery":      float(next_obs[0]),
+            #     "storage":      float(next_obs[1]),
+            # }
+            # for i in range(2, len(next_obs)):
+            #     record[f"obs_{i}"] = float(next_obs[i])
+            # all_records.append(record)
+
+            #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
+            upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
+            pdb.set_trace()
+
+            for i, opp in enumerate(upcomingOpps):
+                print(i, 
+                      opp["object"].name,
+                      str(opp["window"]),
+                      )
+            print("OBS SLOT 0: ", next_obs[2:6])
+            print("OBS SLOT 1: ", next_obs[6:10])
+            print("OBS SLOT 2: ", next_obs[10:14])
+            print("OBS SLOT 3: ", next_obs[14:18])
+            print("OBS SLOT 4: ", next_obs[18:22])
+            
+            pdb.set_trace()
+            total_reward += reward                        
+
+
+            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+            #pdb.set_trace()
+
             record = {
-                "episode":      ep,
-                "step":         step,
-                "action":       action,
-                "action_name":  ACTION_NAMES.get(action, str(action)),
-                "reward":       float(reward),
-                "total_reward": total_reward,
-                "terminated":   terminated,
-                "truncated":    truncated,
+                "episode": ep,
+                "step": step,
+                "d_ts": info.get("d_ts"),
+                "required_retasking": info.get("requires_retasking"),
+                "action": action,
+                "selected_target": selected_target,
+                "imaged_target": imaged_target,
+                "reward": float(reward),
+                "total_reward": float(total_reward),
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "target_0_name": upcomingOpps[0]["object"].name,
+                "target_1_name": upcomingOpps[1]["object"].name,
+                "target_2_name": upcomingOpps[2]["object"].name,
+                "target_3_name": upcomingOpps[3]["object"].name,
+                "target_4_name": upcomingOpps[4]["object"].name,
                 "battery":      float(next_obs[0]),
-                "storage":      float(next_obs[1]),
+                "storage":      float(next_obs[1])
             }
             for i in range(2, len(next_obs)):
                 record[f"obs_{i}"] = float(next_obs[i])
             all_records.append(record)
+
+            #pdb.set_trace()
 
             obs_np = next_obs
             step  += 1
@@ -189,7 +249,7 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             action = env.action_space.sample()
 
             try:
-                next_obs, reward, terminated, truncated, _ = env.step(action)
+                next_obs, reward, terminated, truncated, info = env.step(action)
             except RuntimeError:
                 next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
                 reward, terminated, truncated = 0.0, True, False
@@ -199,18 +259,67 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
+            # record = {
+            #     "episode":      ep,
+            #     "step":         step,
+            #     "action":       action,
+            #     "action_name":  ACTION_NAMES.get(action, str(action)),
+            #     "reward":       float(reward),
+            #     "total_reward": total_reward,
+            #     "terminated":   terminated,
+            #     "truncated":    truncated,
+            #     "battery":      float(next_obs[0]),
+            #     "storage":      float(next_obs[1]),
+            # }
+            # for i in range(2, len(next_obs)):
+            #     record[f"obs_{i}"] = float(next_obs[i])
+            # all_records.append(record)
+
+            #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
+            upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
+
+            for i, opp in enumerate(upcomingOpps):
+                print(i, 
+                      opp["object"].name,
+                      opp["opportunity_open"],
+                      opp["opportunity_close"]
+                      )
+            print("OBS SLOT 0: ", next_obs[2:5])
+            print("OBS SLOT 1: ", next_obs[6:9])
+            print("OBS SLOT 2: ", next_obs[10:13])
+            print("OBS SLOT 3: ", next_obs[14:17])
+            print("OBS SLOT 4: ", next_obs[18:21])
+
+            pdb.set_trace()
+            total_reward += reward   
+
+            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+            #pdb.set_trace()
             record = {
-                "episode":      ep,
-                "step":         step,
-                "action":       action,
-                "action_name":  ACTION_NAMES.get(action, str(action)),
-                "reward":       float(reward),
-                "total_reward": total_reward,
-                "terminated":   terminated,
-                "truncated":    truncated,
+                "episode": ep,
+                "step": step,
+                "d_ts": info.get("d_ts"),
+                "required_retasking": info.get("requires_retasking"),
+                "action": action,
+                "selected_target": selected_target,
+                "imaged_target": imaged_target,
+                "reward": float(reward),
+                "total_reward": float(total_reward),
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "target_0_name": upcomingOpps[0]["object"].name,
+                "target_1_name": upcomingOpps[1]["object"].name,
+                "target_2_name": upcomingOpps[2]["object"].name,
+                "target_3_name": upcomingOpps[3]["object"].name,
+                "target_4_name": upcomingOpps[4]["object"].name,
                 "battery":      float(next_obs[0]),
-                "storage":      float(next_obs[1]),
-            }
+                "storage":      float(next_obs[1])
+            }   
             for i in range(2, len(next_obs)):
                 record[f"obs_{i}"] = float(next_obs[i])
             all_records.append(record)
@@ -753,7 +862,7 @@ def main():
     # ── Run PPO rollouts ──────────────────────────────────────────────────────
     print(f"\nRunning {args.episodes} PPO greedy episodes (max {args.max_steps} steps each)...")
     df_steps, df_summary = run_rollout(model, args.episodes, args.max_steps)
-
+    #pdb.set_trace()
     print("\nEpisode summary (PPO):")
     print(df_summary.to_string(index=False))
     print(f"\nMean total reward: {df_summary['total_reward'].mean():.4f}")
@@ -769,6 +878,7 @@ def main():
     # ── Summary table + statistical comparison ────────────────────────────────
     print_summary_table(df_summary, df_rnd_summary)
 
+    pdb.set_trace()
     # ── Save CSVs ─────────────────────────────────────────────────────────────
     df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",         index=False)
     df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",     index=False)
