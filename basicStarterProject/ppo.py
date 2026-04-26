@@ -206,10 +206,13 @@ def collect_rollout(
     """
     buffer = RolloutBuffer()
 
-    ep_rewards:  List[float] = []
-    ep_lengths:  List[int]   = []
+    ep_rewards:       List[float] = []
+    ep_lengths:       List[int]   = []
+    ep_battery_fails: List[bool]  = []
     ep_reward    = 0.0
     ep_len       = 0
+    ep_failed    = False
+    action_counts = {}
 
     obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset)
 
@@ -222,12 +225,15 @@ def collect_rollout(
             log_prob    = dist.log_prob(action)
 
         action_int = action.item()
+        action_counts[action_int] = action_counts.get(action_int, 0) + 1
         try:
-            next_obs_np, reward, terminated, truncated, _ = env.step(action_int)
+            next_obs_np, reward, terminated, truncated, info = env.step(action_int)
+            if info.get("battery_failure", False):
+                ep_failed = True
         except RuntimeError:
-            # Battery failure corrupts BSK-RL internal state — reset and move on
             next_obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset + len(ep_rewards))
             reward, terminated, truncated = 0.0, True, False
+            ep_failed = True
         done = terminated or truncated
 
         buffer.add(
@@ -246,8 +252,10 @@ def collect_rollout(
         if done or ep_len >= hp.max_ep_steps:
             ep_rewards.append(ep_reward)
             ep_lengths.append(ep_len)
+            ep_battery_fails.append(ep_failed)
             ep_reward = 0.0
             ep_len    = 0
+            ep_failed = False
             obs_np, _ = env.reset(seed=env_cfg.seed + seed_offset + len(ep_rewards))
 
     # Bootstrap value for the last (possibly incomplete) episode
@@ -261,12 +269,21 @@ def collect_rollout(
         lam        = hp.lam,
     )
 
+    n_fails     = sum(ep_battery_fails)
+    total_acts  = sum(action_counts.values()) or 1
+    charge_frac = action_counts.get(0, 0) / total_acts
+    image_frac  = 1.0 - charge_frac
+
     stats = {
-        "ep_reward_mean": float(np.mean(ep_rewards))  if ep_rewards else float("nan"),
-        "ep_reward_min":  float(np.min(ep_rewards))   if ep_rewards else float("nan"),
-        "ep_reward_max":  float(np.max(ep_rewards))   if ep_rewards else float("nan"),
-        "ep_len_mean":    float(np.mean(ep_lengths))  if ep_lengths else float("nan"),
-        "n_episodes":     len(ep_rewards),
+        "ep_reward_mean":      float(np.mean(ep_rewards))  if ep_rewards else float("nan"),
+        "ep_reward_min":       float(np.min(ep_rewards))   if ep_rewards else float("nan"),
+        "ep_reward_max":       float(np.max(ep_rewards))   if ep_rewards else float("nan"),
+        "ep_len_mean":         float(np.mean(ep_lengths))  if ep_lengths else float("nan"),
+        "n_episodes":          len(ep_rewards),
+        "battery_failure_rate": float(n_fails / len(ep_rewards)) if ep_rewards else float("nan"),
+        "n_battery_failures":  n_fails,
+        "charge_fraction":     charge_frac,
+        "image_fraction":      image_frac,
     }
     return buffer, stats
 
@@ -511,6 +528,27 @@ def train(hp: PPOConfig | None = None):
     optimizer = optim.Adam(model.parameters(), lr=hp.lr, eps=1e-5)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
+    # ── Print run configuration ───────────────────────────────────────────────
+    print("\n── Run Configuration ──────────────────────────────────────────────")
+    print(f"  Network hidden sizes : {hp.hidden_sizes}")
+    print(f"  Training iterations  : {hp.train_iters}")
+    print(f"  Steps per iteration  : {hp.steps_per_iter}")
+    print(f"  Max steps per episode: {hp.max_ep_steps}")
+    print(f"  Learning rate        : {hp.lr}")
+    print(f"  Discount factor γ    : {hp.gamma}")
+    print(f"  GAE lambda λ         : {hp.lam}")
+    print(f"  PPO clip epsilon ε   : {hp.clip_eps}")
+    print(f"  SGD epochs per iter  : {hp.n_epochs}")
+    print(f"  Minibatch size       : {hp.minibatch_size}")
+    print(f"  Value loss coeff     : {hp.vf_coef}")
+    print(f"  Entropy bonus        : {hp.ent_coef}")
+    print(f"  Clip VF loss         : {hp.clip_vf_loss}")
+    print(f"  Gradient clip norm   : {hp.max_grad_norm}")
+    print(f"  Seed                 : {hp.seed}")
+    print(f"  Checkpoint every     : {hp.checkpoint_every} iters")
+    print(f"  Output dir           : {hp.checkpoint_dir.parent}")
+    print("────────────────────────────────────────────────────────────────────\n")
+
     # ── Output directories + CSV logger ──────────────────────────────────────
     paths = TrainConfig()
     paths.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -523,7 +561,8 @@ def train(hp: PPOConfig | None = None):
     csv_header = [
         "iter",
         "ep_reward_mean", "ep_reward_min", "ep_reward_max", "ep_len_mean",
-        "n_episodes",
+        "n_episodes", "battery_failure_rate", "n_battery_failures",
+        "charge_fraction", "image_fraction",
         "loss_total", "loss_policy", "loss_value", "entropy",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -568,6 +607,8 @@ def train(hp: PPOConfig | None = None):
             ep_stats["ep_reward_mean"], ep_stats["ep_reward_min"],
             ep_stats["ep_reward_max"],  ep_stats["ep_len_mean"],
             ep_stats["n_episodes"],
+            ep_stats["battery_failure_rate"], ep_stats["n_battery_failures"],
+            ep_stats["charge_fraction"],      ep_stats["image_fraction"],
             loss_stats["loss_total"],   loss_stats["loss_policy"],
             loss_stats["loss_value"],   loss_stats["entropy"],
         ]
@@ -611,35 +652,42 @@ def train(hp: PPOConfig | None = None):
 # ---------------------------------------------------------------------------
 
 def parse_args() -> PPOConfig:
+    # All defaults come from PPOConfig in config.py — edit that file to change
+    # training settings. CLI args can override individual fields if needed.
+    cfg = PPOConfig()
+
     parser = argparse.ArgumentParser(description="Train PPO on BSK-RL spacecraft env")
-    parser.add_argument("--iters",          type=int,   default=50,    help="Training iterations")
-    parser.add_argument("--steps",          type=int,   default=2048,  help="Steps per iteration")
-    parser.add_argument("--lr",             type=float, default=3e-4,  help="Adam learning rate")
-    parser.add_argument("--gamma",          type=float, default=0.99,  help="Discount factor")
-    parser.add_argument("--lam",            type=float, default=0.95,  help="GAE lambda")
-    parser.add_argument("--clip-eps",       type=float, default=0.2,   help="PPO clip epsilon")
-    parser.add_argument("--n-epochs",       type=int,   default=10,    help="SGD epochs per iter")
-    parser.add_argument("--minibatch",      type=int,   default=64,    help="Minibatch size")
-    parser.add_argument("--ent-coef",       type=float, default=0.01,  help="Entropy bonus")
-    parser.add_argument("--seed",           type=int,   default=1,     help="Random seed")
-    parser.add_argument("--no-clip-vf",     action="store_true",       help="Disable VF loss clipping")
+    parser.add_argument("--iters",      type=int,   default=cfg.train_iters,    help="Training iterations")
+    parser.add_argument("--steps",      type=int,   default=cfg.steps_per_iter, help="Steps per iteration")
+    parser.add_argument("--lr",         type=float, default=cfg.lr,             help="Adam learning rate")
+    parser.add_argument("--gamma",      type=float, default=cfg.gamma,          help="Discount factor")
+    parser.add_argument("--lam",        type=float, default=cfg.lam,            help="GAE lambda")
+    parser.add_argument("--clip-eps",   type=float, default=cfg.clip_eps,       help="PPO clip epsilon")
+    parser.add_argument("--n-epochs",   type=int,   default=cfg.n_epochs,       help="SGD epochs per iter")
+    parser.add_argument("--minibatch",  type=int,   default=cfg.minibatch_size, help="Minibatch size")
+    parser.add_argument("--ent-coef",   type=float, default=cfg.ent_coef,       help="Entropy bonus")
+    parser.add_argument("--seed",       type=int,   default=cfg.seed,           help="Random seed")
+    parser.add_argument("--no-clip-vf", action="store_true",                    help="Disable VF loss clipping")
     args = parser.parse_args()
 
-    return PPOConfig(
-        train_iters     = args.iters,
-        steps_per_iter  = args.steps,
-        lr              = args.lr,
-        gamma           = args.gamma,
-        lam             = args.lam,
-        clip_eps        = args.clip_eps,
-        n_epochs        = args.n_epochs,
-        minibatch_size  = args.minibatch,
-        ent_coef        = args.ent_coef,
-        seed            = args.seed,
-        clip_vf_loss    = not args.no_clip_vf,
-    )
+    # Apply parsed args back onto the config object so all other fields
+    # (hidden_sizes, checkpoint_every, paths, etc.) are preserved from config.py
+    cfg.train_iters    = args.iters
+    cfg.steps_per_iter = args.steps
+    cfg.lr             = args.lr
+    cfg.gamma          = args.gamma
+    cfg.lam            = args.lam
+    cfg.clip_eps       = args.clip_eps
+    cfg.n_epochs       = args.n_epochs
+    cfg.minibatch_size = args.minibatch
+    cfg.ent_coef       = args.ent_coef
+    cfg.seed           = args.seed
+    if args.no_clip_vf:
+        cfg.clip_vf_loss = False
+
+    return cfg
 
 
 if __name__ == "__main__":
-    hp    = parse_args()
+    hp = parse_args()
     train(hp)

@@ -9,7 +9,7 @@ class EnvConfig:
     satellite_name: str = "EO1"
     episode_time_limit_s: float = 5*60*60
     seed: int = 1
-    #seed: int = int(time.time())
+    # seed: int = int(time.time())
 
 @dataclass
 class TrainConfig:
@@ -53,9 +53,9 @@ class PPOConfig:
     max_grad_norm:    float = 0.5   # gradient clipping
 
     # ── Training loop ─────────────────────────────────────────────────────────
-    train_iters:      int   = 20
+    train_iters:      int   = 100
     seed:             int   = 1     # matches EnvConfig.seed
-    checkpoint_every: int   = 10    # save a checkpoint every N iterations
+    checkpoint_every: int   = 25    # save a checkpoint every N iterations
 
     # ── Output paths (shared with TrainConfig) ────────────────────────────────
     checkpoint_dir: Path = _OUTDIR_ / "checkpoints"

@@ -99,6 +99,8 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
         step         = 0
         total_reward = 0.0
 
+        cities_imaged = 0
+
         while not done and step < max_steps:
             obs_t = torch.as_tensor(obs_np, dtype=torch.float32).unsqueeze(0)
             with torch.no_grad():
@@ -113,6 +115,8 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 reward, terminated, truncated = 0.0, True, False
 
             total_reward += float(reward)
+            if float(reward) > 0:
+                cities_imaged += 1
             done = terminated or truncated
 
             record = {
@@ -134,16 +138,22 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             obs_np = next_obs
             step  += 1
 
+        imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
+
         summary_records.append({
-            "episode":      ep,
-            "steps":        step,
-            "total_reward": total_reward,
-            "terminated":   terminated,
-            "truncated":    truncated,
+            "episode":           ep,
+            "steps":             step,
+            "total_reward":      total_reward,
+            "cities_imaged":     cities_imaged,
+            "imaging_efficiency": imaging_efficiency,
+            "terminated":        terminated,
+            "truncated":         truncated,
         })
 
         print(f"  Episode {ep+1:2d}/{episodes}  steps={step:4d}  "
               f"total_reward={total_reward:.4f}  "
+              f"cities_imaged={cities_imaged}  "
+              f"efficiency={imaging_efficiency:.3f}  "
               f"{'TERMINATED' if terminated else 'truncated'}")
 
     env.close()
@@ -173,6 +183,8 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
         step         = 0
         total_reward = 0.0
 
+        cities_imaged = 0
+
         while not done and step < max_steps:
             action = env.action_space.sample()
 
@@ -183,6 +195,8 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 reward, terminated, truncated = 0.0, True, False
 
             total_reward += float(reward)
+            if float(reward) > 0:
+                cities_imaged += 1
             done = terminated or truncated
 
             record = {
@@ -204,16 +218,22 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             obs_np = next_obs
             step  += 1
 
+        imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
+
         summary_records.append({
-            "episode":      ep,
-            "steps":        step,
-            "total_reward": total_reward,
-            "terminated":   terminated,
-            "truncated":    truncated,
+            "episode":           ep,
+            "steps":             step,
+            "total_reward":      total_reward,
+            "cities_imaged":     cities_imaged,
+            "imaging_efficiency": imaging_efficiency,
+            "terminated":        terminated,
+            "truncated":         truncated,
         })
 
         print(f"  Episode {ep+1:2d}/{episodes}  steps={step:4d}  "
               f"total_reward={total_reward:.4f}  "
+              f"cities_imaged={cities_imaged}  "
+              f"efficiency={imaging_efficiency:.3f}  "
               f"{'TERMINATED' if terminated else 'truncated'}")
 
     env.close()
@@ -234,7 +254,7 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
     df_trim   = df_steps[df_steps["step"] < min_steps]
     norm_steps = np.linspace(0, 1, min_steps)
 
-    fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(10, 9))
     fig.suptitle(title, fontsize=13)
 
     # ── Mean ± std bands for continuous metrics ───────────────────────────────
@@ -253,21 +273,42 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
         ax.fill_between(norm_steps, mean - std, mean + std,
                         alpha=0.25, label="±1 std")
         ax.set_ylabel(ylabel)
+        ax.set_xlabel("Episode Progress (normalised)")
+        ax.set_xlim(0, 1)
         ax.legend(fontsize=8, loc="upper right")
 
-    # ── Action: per-episode step chart (normalised) ───────────────────────────
+    # ── Action frequency: mean fraction of steps per action ─────────────────
+    all_actions = sorted(df_steps["action"].unique())
+    action_labels = [ACTION_NAMES.get(a, f"Action {a}") for a in all_actions]
+
+    # Compute per-episode action fractions then average across episodes
+    fractions = []
     for ep in episodes:
-        ep_df      = df_steps[df_steps["episode"] == ep].copy()
-        ep_steps   = ep_df["step"].values
-        ep_norm    = ep_steps / ep_steps.max() if ep_steps.max() > 0 else ep_steps
-        axes[3].step(ep_norm, ep_df["action"].values,
-                     where="post", alpha=0.6, label=f"Ep {ep}")
-    axes[3].set_ylabel("Action")
-    axes[3].set_xlabel("Episode Progress (normalised)")
-    axes[3].set_yticks(sorted(df_steps["action"].unique()))
-    axes[3].set_yticklabels([ACTION_NAMES.get(a, str(a))
-                             for a in sorted(df_steps["action"].unique())])
-    axes[3].legend(fontsize=8, loc="upper right")
+        ep_df = df_steps[df_steps["episode"] == ep]
+        total = len(ep_df)
+        fractions.append([
+            (ep_df["action"] == a).sum() / total for a in all_actions
+        ])
+    fractions = np.array(fractions)  # shape (n_episodes, n_actions)
+    mean_frac = fractions.mean(axis=0)
+    std_frac  = fractions.std(axis=0)
+
+    bars = axes[3].bar(action_labels, mean_frac, yerr=std_frac,
+                       capsize=4, color="steelblue", alpha=0.8)
+    axes[3].set_ylabel("Action Frequency")
+    axes[3].set_xlabel("Action")
+    axes[3].set_ylim(0, 1)
+    axes[3].yaxis.set_major_formatter(
+        plt.FuncFormatter(lambda y, _: f"{y:.0%}")
+    )
+    # Annotate bars with percentage
+    for bar, frac in zip(bars, mean_frac):
+        axes[3].text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.02,
+            f"{frac:.1%}",
+            ha="center", va="bottom", fontsize=8,
+        )
 
     plt.tight_layout()
     return fig
@@ -275,33 +316,103 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
 
 def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Training Curve"):
     """
-    Figure 2: reward mean ± min/max shading across training iterations.
-    Reads the most recent training CSV from train_log_dir.
+    Figure 2a: PPO loss metrics (reward, policy loss, value loss, entropy).
+    Figure 2b: Environment metrics (battery failure rate, episode length).
+    Returns (fig_losses, fig_env) — fig_env is None if columns not available.
     """
     csvs = sorted(train_log_dir.glob("*_ppo_train.csv"))
     if not csvs:
         print(f"No training CSVs found in {train_log_dir} — skipping training curve.")
-        return None
+        return None, None
 
     df = pd.read_csv(csvs[-1])
     print(f"\nTraining log: {csvs[-1].name}  ({len(df)} iterations)")
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    fig.suptitle(title, fontsize=13)
+    # ── Figure 2a: Loss metrics ───────────────────────────────────────────────
+    fig_losses, axes = plt.subplots(2, 2, figsize=(12, 7))
+    fig_losses.suptitle(title + " — Loss Metrics", fontsize=13)
 
-    ax.plot(df["iter"], df["ep_reward_mean"], linewidth=1.5, label="Mean reward")
-    ax.fill_between(df["iter"], df["ep_reward_min"], df["ep_reward_max"],
-                    alpha=0.2, label="Min / Max")
-    ax.set_xlabel("Training Iteration")
-    ax.set_ylabel("Episode Reward")
-    ax.legend(fontsize=9)
+    axes[0, 0].plot(df["iter"], df["ep_reward_mean"], linewidth=1.5, label="Mean")
+    axes[0, 0].fill_between(df["iter"], df["ep_reward_min"], df["ep_reward_max"],
+                             alpha=0.2, label="Min / Max")
+    axes[0, 0].set_ylabel("Episode Reward")
+    axes[0, 0].set_xlabel("Training Iteration")
+    axes[0, 0].legend(fontsize=8)
+
+    axes[0, 1].plot(df["iter"], df["loss_policy"], linewidth=1.5, color="tomato")
+    axes[0, 1].set_ylabel("Policy Loss (L_CLIP)")
+    axes[0, 1].set_xlabel("Training Iteration")
+    axes[0, 1].axhline(0, color="gray", linewidth=0.5, linestyle="--")
+
+    axes[1, 0].plot(df["iter"], df["loss_value"], linewidth=1.5, color="darkorange")
+    axes[1, 0].set_ylabel("Value Loss (L_VF)")
+    axes[1, 0].set_xlabel("Training Iteration")
+
+    axes[1, 1].plot(df["iter"], df["entropy"], linewidth=1.5, color="green")
+    axes[1, 1].set_ylabel("Policy Entropy (H)")
+    axes[1, 1].set_xlabel("Training Iteration")
+
     plt.tight_layout()
-    return fig
+
+    # ── Figure 2b: Environment metrics ───────────────────────────────────────
+    has_failure = "battery_failure_rate" in df.columns
+    has_ep_len  = "ep_len_mean" in df.columns
+
+    if not has_failure and not has_ep_len:
+        return fig_losses, None
+
+    n_panels = int(has_failure) + int(has_ep_len)
+    fig_env, env_axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 4))
+    fig_env.suptitle(title + " — Environment Metrics", fontsize=13)
+
+    if n_panels == 1:
+        env_axes = [env_axes]
+
+    ax_idx = 0
+    if has_failure:
+        env_axes[ax_idx].plot(df["iter"], df["battery_failure_rate"] * 100,
+                              linewidth=1.5, color="purple")
+        env_axes[ax_idx].set_ylabel("Battery Failure Rate (%)")
+        env_axes[ax_idx].set_xlabel("Training Iteration")
+        env_axes[ax_idx].set_ylim(0, 100)
+        env_axes[ax_idx].yaxis.set_major_formatter(
+            plt.FuncFormatter(lambda y, _: f"{y:.0f}%")
+        )
+        ax_idx += 1
+
+    if has_ep_len:
+        env_axes[ax_idx].plot(df["iter"], df["ep_len_mean"],
+                              linewidth=1.5, color="teal")
+        env_axes[ax_idx].set_ylabel("Mean Episode Length (steps)")
+        env_axes[ax_idx].set_xlabel("Training Iteration")
+
+    plt.tight_layout()
+    return fig_losses, fig_env
 
 
 # ---------------------------------------------------------------------------
 # Comparison plot
 # ---------------------------------------------------------------------------
+
+def _add_return(df: pd.DataFrame, gamma: float = 0.99) -> pd.DataFrame:
+    """
+    Add a return_ column: sum of future discounted rewards from each step.
+    This is what the PPO critic estimates — G_t = r_t + γr_{t+1} + γ²r_{t+2} + ...
+    """
+    df = df.copy()
+    df["return_"] = 0.0
+    for ep in df["episode"].unique():
+        mask    = df["episode"] == ep
+        rewards = df.loc[mask, "reward"].values
+        T       = len(rewards)
+        G       = np.zeros(T)
+        running = 0.0
+        for t in reversed(range(T)):
+            running = rewards[t] + gamma * running
+            G[t]    = running
+        df.loc[mask, "return_"] = G
+    return df
+
 
 def plot_comparison(
     ppo_steps: pd.DataFrame,
@@ -309,19 +420,24 @@ def plot_comparison(
     ppo_summary: pd.DataFrame,
     rnd_summary: pd.DataFrame,
     title: str = "Custom PPO vs Random Policy",
+    gamma: float = 0.99,
 ):
     """
     Side-by-side mean ± std comparison of PPO vs random policy.
-    Three panels: battery, storage, cumulative reward.
+    Panels: cumulative reward, mean discounted reward, step reward.
     Plus a summary bar chart of mean total reward.
     """
+    # Pre-compute discounted reward for both policies
+    ppo_steps = _add_return(ppo_steps, gamma)
+    rnd_steps = _add_return(rnd_steps, gamma)
+
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle(title, fontsize=13)
 
     metrics = [
-        ("battery", "Battery Fraction",      axes[0, 0]),
-        ("storage", "Storage Fraction",       axes[0, 1]),
-        ("reward",  "Step Reward",            axes[1, 0]),
+        ("total_reward",      "Cumulative Reward",        axes[0, 0]),
+        ("return_",           f"Return G_t (γ={gamma})",        axes[0, 1]),
+        ("reward",            "Step Reward",              axes[1, 0]),
     ]
 
     for col, ylabel, ax in metrics:
@@ -332,7 +448,6 @@ def plot_comparison(
             episodes  = df["episode"].unique()
             min_steps = df.groupby("episode")["step"].count().min()
             df_trim   = df[df["step"] < min_steps]
-            # Normalise to [0, 1] so both policies plot on the same x-axis
             norm_steps = np.linspace(0, 1, min_steps)
             data = np.array([
                 df_trim[df_trim["episode"] == ep][col].values
@@ -393,6 +508,231 @@ def plot_comparison(
 
 
 # ---------------------------------------------------------------------------
+# Cities imaged comparison
+# ---------------------------------------------------------------------------
+
+def plot_cities_imaged(ppo_summary, rnd_summary,
+                       title="Cities Imaged & Imaging Efficiency"):
+    ppo_cities = ppo_summary["cities_imaged"].values
+    rnd_cities = rnd_summary["cities_imaged"].values
+    ppo_eff    = ppo_summary["imaging_efficiency"].values
+    rnd_eff    = rnd_summary["imaging_efficiency"].values
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+    fig.suptitle(title, fontsize=13)
+
+    labels = ["PPO", "Random"]
+    colors = ["steelblue", "tomato"]
+
+    for row, (ppo_vals, rnd_vals, ylabel, row_title) in enumerate([
+        (ppo_cities, rnd_cities, "Cities Imaged",        "Cities Imaged per Episode"),
+        (ppo_eff,    rnd_eff,    "Avg Priority (reward/city)", "Imaging Efficiency (priority-weighted)"),
+    ]):
+        means = [ppo_vals.mean(), rnd_vals.mean()]
+        stds  = [ppo_vals.std(),  rnd_vals.std()]
+
+        # Bar chart
+        bars = axes[row, 0].bar(labels, means, yerr=stds, color=colors,
+                                capsize=6, width=0.5, alpha=0.8)
+        for i, vals in enumerate([ppo_vals, rnd_vals]):
+            axes[row, 0].scatter([i] * len(vals), vals, color="black",
+                                 s=20, zorder=3, alpha=0.6)
+        for bar, mean in zip(bars, means):
+            axes[row, 0].text(bar.get_x() + bar.get_width() / 2,
+                              bar.get_height() + max(stds) * 0.1 + 0.01,
+                              f"{mean:.2f}", ha="center", va="bottom", fontsize=9)
+        axes[row, 0].set_ylabel(ylabel)
+        axes[row, 0].set_title(row_title + " — Mean ± Std")
+        axes[row, 0].set_ylim(0)
+
+        # Per-episode line
+        episodes = range(len(ppo_vals))
+        axes[row, 1].plot(episodes, ppo_vals, "o-", color="steelblue",
+                          linewidth=1.5, label="PPO")
+        axes[row, 1].plot(episodes, rnd_vals, "s-", color="tomato",
+                          linewidth=1.5, label="Random")
+        axes[row, 1].set_xlabel("Episode")
+        axes[row, 1].set_ylabel(ylabel)
+        axes[row, 1].set_title(row_title + " — Per Episode")
+        axes[row, 1].legend(fontsize=9)
+        axes[row, 1].set_xticks(list(episodes))
+        axes[row, 1].set_ylim(0)
+
+    # Print summary
+    print(f"\nCities imaged:")
+    print(f"  PPO    mean = {ppo_cities.mean():.2f} +/- {ppo_cities.std():.2f}")
+    print(f"  Random mean = {rnd_cities.mean():.2f} +/- {rnd_cities.std():.2f}")
+    print(f"\nImaging efficiency (avg priority per city):")
+    print(f"  PPO    mean = {ppo_eff.mean():.3f} +/- {ppo_eff.std():.3f}")
+    print(f"  Random mean = {rnd_eff.mean():.3f} +/- {rnd_eff.std():.3f}")
+    if ppo_eff.mean() > rnd_eff.mean():
+        print("  PPO is targeting higher-priority cities than random.")
+    else:
+        print("  PPO is not yet prioritising high-value cities over random.")
+
+    plt.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Action distribution over training (#3)
+# ---------------------------------------------------------------------------
+
+def plot_action_distribution(train_log_dir: Path,
+                              title: str = "Custom PPO — Action Distribution Over Training"):
+    """
+    Shows how the fraction of Charge vs Image actions evolves over training.
+    A learning policy should start charging more and shift toward imaging
+    as it learns to manage battery.
+    """
+    csvs = sorted(train_log_dir.glob("*_ppo_train.csv"))
+    if not csvs:
+        print("No training CSVs found — skipping action distribution plot.")
+        return None
+
+    df = pd.read_csv(csvs[-1])
+    if "charge_fraction" not in df.columns:
+        print("charge_fraction not in training CSV — retrain to capture this metric.")
+        return None
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    fig.suptitle(title, fontsize=13)
+
+    ax.plot(df["iter"], df["charge_fraction"] * 100,
+            linewidth=1.5, color="steelblue", label="Charge")
+    ax.plot(df["iter"], df["image_fraction"] * 100,
+            linewidth=1.5, color="tomato", label="Image")
+    ax.fill_between(df["iter"], 0, df["charge_fraction"] * 100,
+                    alpha=0.15, color="steelblue")
+    ax.fill_between(df["iter"], df["charge_fraction"] * 100, 100,
+                    alpha=0.15, color="tomato")
+
+    ax.set_xlabel("Training Iteration")
+    ax.set_ylabel("Action Frequency (%)")
+    ax.set_ylim(0, 100)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0f}%"))
+    ax.legend(fontsize=9)
+    ax.axhline(50, color="gray", linewidth=0.5, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Value function estimates during evaluation (#4)
+# ---------------------------------------------------------------------------
+
+def plot_value_estimates(train_log_dir: Path,
+                          title: str = "Custom PPO — Value Estimates vs Actual Return"):
+    """
+    Compares the critic's V(s) estimates during evaluation against
+    the actual discounted return G_t. Good critic = close tracking.
+    """
+    # Load eval steps CSV if it exists
+    eval_csvs = list((train_log_dir.parent / "eval_outputs").glob("ppo_eval_steps.csv"))
+    if not eval_csvs:
+        print("No eval_steps CSV found — run ppo_eval.py first.")
+        return None
+
+    df = pd.read_csv(eval_csvs[0])
+    if "return_" not in df.columns:
+        print("return_ column not in eval CSV — skipping value estimate plot.")
+        return None
+
+    episodes  = df["episode"].unique()
+    min_steps = df.groupby("episode")["step"].count().min()
+    df_trim   = df[df["step"] < min_steps]
+    norm_steps = np.linspace(0, 1, min_steps)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    fig.suptitle(title, fontsize=13)
+
+    # Mean actual return
+    returns = np.array([
+        df_trim[df_trim["episode"] == ep]["return_"].values
+        for ep in episodes
+    ])
+    mean_ret = returns.mean(axis=0)
+    std_ret  = returns.std(axis=0)
+
+    ax.plot(norm_steps, mean_ret, linewidth=1.5, color="steelblue", label="Actual Return G_t")
+    ax.fill_between(norm_steps, mean_ret - std_ret, mean_ret + std_ret,
+                    alpha=0.2, color="steelblue")
+
+    ax.set_xlabel("Episode Progress (normalised)")
+    ax.set_ylabel("Return G_t")
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Summary table and statistical comparison
+# ---------------------------------------------------------------------------
+
+def print_summary_table(ppo_summary: pd.DataFrame, rnd_summary: pd.DataFrame):
+    """
+    Print a formatted summary table comparing PPO vs random across all metrics,
+    with t-test p-values to assess statistical significance.
+    """
+    from scipy import stats
+
+    metrics = [
+        ("total_reward",      "Total Reward"),
+        ("cities_imaged",     "Cities Imaged"),
+        ("imaging_efficiency","Imaging Efficiency"),
+        ("steps",             "Episode Length"),
+    ]
+
+    col_w = 22
+    print("\n" + "=" * 75)
+    print("RESULTS SUMMARY")
+    print("=" * 75)
+    print(f"{'Metric':<25} {'PPO Mean':>10} {'PPO Std':>9} {'Rnd Mean':>10} {'Rnd Std':>9} {'p-value':>9}")
+    print("-" * 75)
+
+    for col, label in metrics:
+        if col not in ppo_summary.columns or col not in rnd_summary.columns:
+            continue
+        ppo_vals = ppo_summary[col].values.astype(float)
+        rnd_vals = rnd_summary[col].values.astype(float)
+
+        t_stat, p_val = stats.ttest_ind(ppo_vals, rnd_vals)
+
+        sig = ""
+        if p_val < 0.001:
+            sig = "***"
+        elif p_val < 0.01:
+            sig = "**"
+        elif p_val < 0.05:
+            sig = "*"
+
+        print(f"{label:<25} {ppo_vals.mean():>10.3f} {ppo_vals.std():>9.3f} "
+              f"{rnd_vals.mean():>10.3f} {rnd_vals.std():>9.3f} "
+              f"{p_val:>8.4f}{sig}")
+
+    print("-" * 75)
+    print("Significance: * p<0.05  ** p<0.01  *** p<0.001")
+    print("=" * 75)
+
+    # Overall interpretation
+    ppo_rew = ppo_summary["total_reward"].values
+    rnd_rew = rnd_summary["total_reward"].values
+    _, p_rew = stats.ttest_ind(ppo_rew, rnd_rew)
+    pct = (ppo_rew.mean() - rnd_rew.mean()) / abs(rnd_rew.mean()) * 100
+
+    print(f"\nPPO achieves {pct:.1f}% {'improvement' if pct >= 0 else 'degradation'} "
+          f"over random in total reward.")
+    if p_rew < 0.05:
+        print("This difference is statistically significant (p < 0.05).")
+    else:
+        print("This difference is NOT statistically significant — consider running "
+              "more episodes for a stronger result.")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -426,6 +766,9 @@ def main():
     print("\nEpisode summary (Random):")
     print(df_rnd_summary.to_string(index=False))
 
+    # ── Summary table + statistical comparison ────────────────────────────────
+    print_summary_table(df_summary, df_rnd_summary)
+
     # ── Save CSVs ─────────────────────────────────────────────────────────────
     df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",         index=False)
     df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",     index=False)
@@ -438,21 +781,43 @@ def main():
         ckpt_label = checkpoint_path.stem
 
         fig1 = plot_episode_metrics(df_steps, title=f"Custom PPO — Evaluation ({ckpt_label})")
-        fig2 = plot_training_curve(paths.train_log_dir, title="Custom PPO — Training Curve")
+        fig2_losses, fig2_env = plot_training_curve(
+            paths.train_log_dir, title="Custom PPO — Training Curve"
+        )
         fig3 = plot_comparison(
             df_steps, df_rnd_steps,
             df_summary, df_rnd_summary,
             title=f"Custom PPO vs Random — {ckpt_label}",
         )
 
-        fig1.savefig(paths.eval_dir / "ppo_eval_metrics.png",    dpi=150, bbox_inches="tight")
-        fig3.savefig(paths.eval_dir / "ppo_vs_random.png",       dpi=150, bbox_inches="tight")
+        fig1.savefig(paths.eval_dir / "ppo_eval_metrics.png",  dpi=150, bbox_inches="tight")
+        fig3.savefig(paths.eval_dir / "ppo_vs_random.png",     dpi=150, bbox_inches="tight")
         print(f"Saved: {paths.eval_dir / 'ppo_eval_metrics.png'}")
         print(f"Saved: {paths.eval_dir / 'ppo_vs_random.png'}")
 
-        if fig2 is not None:
-            fig2.savefig(paths.eval_dir / "ppo_training_curve.png", dpi=150, bbox_inches="tight")
-            print(f"Saved: {paths.eval_dir / 'ppo_training_curve.png'}")
+        fig4 = plot_cities_imaged(
+            df_summary, df_rnd_summary,
+            title=f"Cities Imaged — PPO vs Random ({ckpt_label})",
+        )
+        fig4.savefig(paths.eval_dir / "ppo_cities_imaged.png", dpi=150, bbox_inches="tight")
+        print(f"Saved: {paths.eval_dir / 'ppo_cities_imaged.png'}")
+
+        fig5 = plot_action_distribution(paths.train_log_dir)
+        if fig5 is not None:
+            fig5.savefig(paths.eval_dir / "ppo_action_distribution.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {paths.eval_dir / 'ppo_action_distribution.png'}")
+
+        fig6 = plot_value_estimates(paths.train_log_dir)
+        if fig6 is not None:
+            fig6.savefig(paths.eval_dir / "ppo_value_estimates.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {paths.eval_dir / 'ppo_value_estimates.png'}")
+
+        if fig2_losses is not None:
+            fig2_losses.savefig(paths.eval_dir / "ppo_training_losses.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {paths.eval_dir / 'ppo_training_losses.png'}")
+        if fig2_env is not None:
+            fig2_env.savefig(paths.eval_dir / "ppo_training_env.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {paths.eval_dir / 'ppo_training_env.png'}")
 
         plt.show()
 
