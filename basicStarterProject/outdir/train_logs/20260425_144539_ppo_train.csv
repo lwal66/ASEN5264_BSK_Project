@@ -1,0 +1,2 @@
+iter,ep_reward_mean,ep_reward_min,ep_reward_max,ep_len_mean,n_episodes,battery_failure_rate,n_battery_failures,charge_fraction,image_fraction,loss_total,loss_policy,loss_value,entropy
+1,5.482519595628343,-2.7641636174890767,10.993051209108298,77.6923076923077,26,0.038461538461538464,1,0.16943359375,0.83056640625,1.0899785010144114,-0.008073285958380439,2.231818588450551,1.785751099139452

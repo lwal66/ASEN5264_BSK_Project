@@ -1,0 +1,6 @@
+episode,steps,total_reward,terminated,truncated
+0,47,6.916926767167274,True,True
+1,43,-3.952462967860235,True,False
+2,54,7.042301802120678,True,True
+3,44,3.8195565422076543,True,True
+4,43,3.4733958218294894,True,True
