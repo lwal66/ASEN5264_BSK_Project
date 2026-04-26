@@ -37,6 +37,10 @@ from ppo import ActorCritic, ACTION_NAMES
 from config import EnvConfig, PPOConfig, TrainConfig
 from envs import make_env
 
+<<<<<<< Updated upstream
+=======
+# import pdb
+>>>>>>> Stashed changes
 
 # ---------------------------------------------------------------------------
 # Checkpoint loading
@@ -119,6 +123,52 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
+<<<<<<< Updated upstream
+=======
+            # record = {
+            #     "episode":      ep,
+            #     "step":         step,
+            #     "action":       action,
+            #     "action_name":  ACTION_NAMES.get(action, str(action)),
+            #     "reward":       float(reward),
+            #     "total_reward": total_reward,
+            #     "terminated":   terminated,
+            #     "truncated":    truncated,
+            #     "battery":      float(next_obs[0]),
+            #     "storage":      float(next_obs[1]),
+            # }
+            # for i in range(2, len(next_obs)):
+            #     record[f"obs_{i}"] = float(next_obs[i])
+            # all_records.append(record)
+
+            #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
+            upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
+            # pdb.set_trace()
+
+            # for i, opp in enumerate(upcomingOpps):
+            #     print(i, 
+            #           opp["object"].name,
+            #           str(opp["window"]),
+            #           )
+            # print("OBS SLOT 0: ", next_obs[2:6])
+            # print("OBS SLOT 1: ", next_obs[6:10])
+            # print("OBS SLOT 2: ", next_obs[10:14])
+            # print("OBS SLOT 3: ", next_obs[14:18])
+            # print("OBS SLOT 4: ", next_obs[18:22])
+            
+            # pdb.set_trace()
+            total_reward += reward                        
+
+
+            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+            #pdb.set_trace()
+
+>>>>>>> Stashed changes
             record = {
                 "episode":      ep,
                 "step":         step,
@@ -199,6 +249,50 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
+<<<<<<< Updated upstream
+=======
+            # record = {
+            #     "episode":      ep,
+            #     "step":         step,
+            #     "action":       action,
+            #     "action_name":  ACTION_NAMES.get(action, str(action)),
+            #     "reward":       float(reward),
+            #     "total_reward": total_reward,
+            #     "terminated":   terminated,
+            #     "truncated":    truncated,
+            #     "battery":      float(next_obs[0]),
+            #     "storage":      float(next_obs[1]),
+            # }
+            # for i in range(2, len(next_obs)):
+            #     record[f"obs_{i}"] = float(next_obs[i])
+            # all_records.append(record)
+
+            #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
+            upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
+
+            # for i, opp in enumerate(upcomingOpps):
+            #     print(i, 
+            #           opp["object"].name,
+            #           opp["opportunity_open"],
+            #           opp["opportunity_close"]
+            #           )
+            # print("OBS SLOT 0: ", next_obs[2:5])
+            # print("OBS SLOT 1: ", next_obs[6:9])
+            # print("OBS SLOT 2: ", next_obs[10:13])
+            # print("OBS SLOT 3: ", next_obs[14:17])
+            # print("OBS SLOT 4: ", next_obs[18:21])
+
+            # pdb.set_trace()
+            total_reward += reward   
+
+            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+            #pdb.set_trace()
+>>>>>>> Stashed changes
             record = {
                 "episode":      ep,
                 "step":         step,
@@ -668,6 +762,108 @@ def plot_value_estimates(train_log_dir: Path,
 
 
 # ---------------------------------------------------------------------------
+# Imaging disparity analysis
+# ---------------------------------------------------------------------------
+
+def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disparity Analysis"):
+    """
+    Analyzes the disparity between selected_target (what the policy chose)
+    and imaged_target (what BSK-RL actually imaged).
+
+    Three outcomes per imaging step:
+      - Match:    selected == imaged  (policy intent executed correctly)
+      - Mismatch: different city imaged (slew timing caused queue shift)
+      - No image: nothing imaged      (failed to reach target in time)
+
+    Prints a console summary and returns a figure with two panels.
+    """
+    if "selected_target" not in df_steps.columns or "imaged_target" not in df_steps.columns:
+        print("selected_target / imaged_target columns not found — skipping disparity analysis.")
+        return None
+
+    # Only look at imaging actions (action != 0 = Charge)
+    img = df_steps[df_steps["action"] != 0].copy()
+    total = len(img)
+
+    no_image = img["imaged_target"].isna() | (img["imaged_target"] == "")
+    match    = (img["selected_target"] == img["imaged_target"]) & ~no_image
+    mismatch = ~match & ~no_image
+
+    n_match    = match.sum()
+    n_mismatch = mismatch.sum()
+    n_no_image = no_image.sum()
+
+    # ── Console summary ───────────────────────────────────────────────────────
+    print("" + "=" * 65)
+    print("IMAGING DISPARITY ANALYSIS")
+    print("=" * 65)
+    print(f"  Total imaging action steps : {total}")
+    print(f"  Target matched             : {n_match:4d}  ({n_match/total*100:.1f}%)")
+    print(f"  Different city imaged      : {n_mismatch:4d}  ({n_mismatch/total*100:.1f}%)")
+    print(f"  No image achieved          : {n_no_image:4d}  ({n_no_image/total*100:.1f}%)")
+
+    if "d_ts" in img.columns:
+        print(f"  Mean step duration (match)    : {img[match]['d_ts'].mean():.1f}s")
+        print(f"  Mean step duration (mismatch) : {img[mismatch]['d_ts'].mean():.1f}s")
+        print(f"  Mean step duration (no image) : {img[no_image]['d_ts'].mean():.1f}s")
+
+    print("  Interpretation:")
+    print(f"  - Mismatch steps often indicate the satellite imaged a nearby")
+    print(f"    target faster than expected and captured a second city within")
+    print(f"    the same step window — these are still successful imaging events.")
+    print(f"  - No-image steps indicate the satellite could not slew to the")
+    print(f"    selected target within the step duration, suggesting the policy")
+    print(f"    sometimes selects targets that are too far away to reach in time.")
+    print("=" * 65)
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    fig.suptitle(title, fontsize=13)
+
+    # Pie chart of outcomes
+    sizes  = [n_match, n_mismatch, n_no_image]
+    labels = [
+        f"Match({n_match/total*100:.1f}%)",
+        f"Different city imaged({n_mismatch/total*100:.1f}%)",
+        f"No image({n_no_image/total*100:.1f}%)",
+    ]
+    colors = ["steelblue", "darkorange", "tomato"]
+    axes[0].pie(sizes, labels=labels, colors=colors, startangle=90,
+                wedgeprops=dict(edgecolor="white", linewidth=1.5))
+    axes[0].set_title("Imaging Outcome Distribution")
+
+    # Per-episode bar chart
+    episodes = sorted(df_steps["episode"].unique())
+    ep_match    = []
+    ep_mismatch = []
+    ep_no_image = []
+
+    for ep in episodes:
+        ep_img = img[img["episode"] == ep]
+        ep_no  = ep_img["imaged_target"].isna() | (ep_img["imaged_target"] == "")
+        ep_m   = (ep_img["selected_target"] == ep_img["imaged_target"]) & ~ep_no
+        ep_mis = ~ep_m & ~ep_no
+        ep_match.append(ep_m.sum())
+        ep_mismatch.append(ep_mis.sum())
+        ep_no_image.append(ep_no.sum())
+
+    x = np.arange(len(episodes))
+    w = 0.25
+    axes[1].bar(x - w, ep_match,    width=w, label="Match",               color="steelblue")
+    axes[1].bar(x,     ep_mismatch, width=w, label="Different city imaged",color="darkorange")
+    axes[1].bar(x + w, ep_no_image, width=w, label="No image",             color="tomato")
+    axes[1].set_xlabel("Episode")
+    axes[1].set_ylabel("Steps")
+    axes[1].set_title("Imaging Outcomes per Episode")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels([f"Ep {ep}" for ep in episodes])
+    axes[1].legend(fontsize=8)
+
+    plt.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Summary table and statistical comparison
 # ---------------------------------------------------------------------------
 
@@ -769,6 +965,10 @@ def main():
     # ── Summary table + statistical comparison ────────────────────────────────
     print_summary_table(df_summary, df_rnd_summary)
 
+<<<<<<< Updated upstream
+=======
+    # pdb.set_trace()
+>>>>>>> Stashed changes
     # ── Save CSVs ─────────────────────────────────────────────────────────────
     df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",         index=False)
     df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",     index=False)
@@ -818,6 +1018,14 @@ def main():
         if fig2_env is not None:
             fig2_env.savefig(paths.eval_dir / "ppo_training_env.png", dpi=150, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_training_env.png'}")
+
+        fig7 = analyze_imaging_disparity(
+            df_steps,
+            title=f"Imaging Disparity — PPO ({ckpt_label})",
+        )
+        if fig7 is not None:
+            fig7.savefig(paths.eval_dir / "ppo_imaging_disparity.png", dpi=150, bbox_inches="tight")
+            print(f"Saved: {paths.eval_dir / 'ppo_imaging_disparity.png'}")
 
         plt.show()
 
