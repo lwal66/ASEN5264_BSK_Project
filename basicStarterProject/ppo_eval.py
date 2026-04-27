@@ -37,10 +37,7 @@ from ppo import ActorCritic, ACTION_NAMES
 from config import EnvConfig, PPOConfig, TrainConfig
 from envs import make_env
 
-<<<<<<< Updated upstream
-=======
 # import pdb
->>>>>>> Stashed changes
 
 # ---------------------------------------------------------------------------
 # Checkpoint loading
@@ -104,12 +101,20 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
         total_reward = 0.0
 
         cities_imaged = 0
+        ep_start_idx  = len(all_records)  # track where this episode starts in all_records
 
         while not done and step < max_steps:
             obs_t = torch.as_tensor(obs_np, dtype=torch.float32).unsqueeze(0)
             with torch.no_grad():
                 dist, value = model(obs_t)
                 action      = dist.probs.argmax(dim=-1).item()  # greedy
+
+            # Read opportunity list BEFORE env.step() so selected_target reflects
+            # what the policy observed when it chose the action, not the post-step list
+            try:
+                pre_step_opps = env.unwrapped.satellite.upcoming_opportunities
+            except Exception:
+                pre_step_opps = []
 
             try:
                 next_obs, reward, terminated, truncated, _ = env.step(action)
@@ -123,8 +128,6 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
-<<<<<<< Updated upstream
-=======
             # record = {
             #     "episode":      ep,
             #     "step":         step,
@@ -160,7 +163,7 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             total_reward += reward                        
 
 
-            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
             imaged_target = None
             if reward > 0:
                 tgt = getattr(env.unwrapped.satellite, "latest_target", None)
@@ -168,18 +171,19 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                     imaged_target = tgt.name
             #pdb.set_trace()
 
->>>>>>> Stashed changes
             record = {
-                "episode":      ep,
-                "step":         step,
-                "action":       action,
-                "action_name":  ACTION_NAMES.get(action, str(action)),
-                "reward":       float(reward),
-                "total_reward": total_reward,
-                "terminated":   terminated,
-                "truncated":    truncated,
-                "battery":      float(next_obs[0]),
-                "storage":      float(next_obs[1]),
+                "episode":        ep,
+                "step":           step,
+                "action":         action,
+                "action_name":    ACTION_NAMES.get(action, str(action)),
+                "reward":         float(reward),
+                "total_reward":   total_reward,
+                "terminated":     terminated,
+                "truncated":      truncated,
+                "battery":        float(next_obs[0]),
+                "storage":        float(next_obs[1]),
+                "selected_target": selected_target,
+                "imaged_target":   imaged_target,
             }
             for i in range(2, len(next_obs)):
                 record[f"obs_{i}"] = float(next_obs[i])
@@ -189,6 +193,14 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             step  += 1
 
         imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
+
+        # Compute discounted return G_t for each step in this episode
+        ep_records = all_records[ep_start_idx:]
+        T = len(ep_records)
+        running = 0.0
+        for t in reversed(range(T)):
+            running = ep_records[t]["reward"] + 0.99 * running
+            all_records[ep_start_idx + t]["return_"] = running
 
         summary_records.append({
             "episode":           ep,
@@ -238,6 +250,13 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
         while not done and step < max_steps:
             action = env.action_space.sample()
 
+            # Read opportunity list BEFORE env.step() so selected_target reflects
+            # what the policy observed when it chose the action, not the post-step list
+            try:
+                pre_step_opps = env.unwrapped.satellite.upcoming_opportunities
+            except Exception:
+                pre_step_opps = []
+
             try:
                 next_obs, reward, terminated, truncated, _ = env.step(action)
             except RuntimeError:
@@ -249,8 +268,6 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 cities_imaged += 1
             done = terminated or truncated
 
-<<<<<<< Updated upstream
-=======
             # record = {
             #     "episode":      ep,
             #     "step":         step,
@@ -285,25 +302,26 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             # pdb.set_trace()
             total_reward += reward   
 
-            selected_target = upcomingOpps[action - 1]["object"].name if action > 0 else None
+            selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
             imaged_target = None
             if reward > 0:
                 tgt = getattr(env.unwrapped.satellite, "latest_target", None)
                 if tgt is not None:
                     imaged_target = tgt.name
             #pdb.set_trace()
->>>>>>> Stashed changes
             record = {
-                "episode":      ep,
-                "step":         step,
-                "action":       action,
-                "action_name":  ACTION_NAMES.get(action, str(action)),
-                "reward":       float(reward),
-                "total_reward": total_reward,
-                "terminated":   terminated,
-                "truncated":    truncated,
-                "battery":      float(next_obs[0]),
-                "storage":      float(next_obs[1]),
+                "episode":         ep,
+                "step":            step,
+                "action":          action,
+                "action_name":     ACTION_NAMES.get(action, str(action)),
+                "reward":          float(reward),
+                "total_reward":    total_reward,
+                "terminated":      terminated,
+                "truncated":       truncated,
+                "battery":         float(next_obs[0]),
+                "storage":         float(next_obs[1]),
+                "selected_target": selected_target,
+                "imaged_target":   imaged_target,
             }
             for i in range(2, len(next_obs)):
                 record[f"obs_{i}"] = float(next_obs[i])
@@ -965,10 +983,7 @@ def main():
     # ── Summary table + statistical comparison ────────────────────────────────
     print_summary_table(df_summary, df_rnd_summary)
 
-<<<<<<< Updated upstream
-=======
     # pdb.set_trace()
->>>>>>> Stashed changes
     # ── Save CSVs ─────────────────────────────────────────────────────────────
     df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",         index=False)
     df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",     index=False)
