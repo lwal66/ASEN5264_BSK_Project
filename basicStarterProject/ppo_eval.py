@@ -101,7 +101,6 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
         total_reward = 0.0
 
         cities_imaged = 0
-        ep_start_idx  = len(all_records)  # track where this episode starts in all_records
 
         while not done and step < max_steps:
             obs_t = torch.as_tensor(obs_np, dtype=torch.float32).unsqueeze(0)
@@ -109,12 +108,13 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                 dist, value = model(obs_t)
                 action      = dist.probs.argmax(dim=-1).item()  # greedy
 
-            # Read opportunity list BEFORE env.step() so selected_target reflects
-            # what the policy observed when it chose the action, not the post-step list
+            # Read opportunity list BEFORE env.step() so selected_target
+            # reflects what the policy observed when it chose the action
             try:
-                pre_step_opps = env.unwrapped.satellite.upcoming_opportunities
+                pre_step_opps   = env.unwrapped.satellite.upcoming_opportunities
+                selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
             except Exception:
-                pre_step_opps = []
+                selected_target = None
 
             try:
                 next_obs, reward, terminated, truncated, _ = env.step(action)
@@ -144,6 +144,7 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             #     record[f"obs_{i}"] = float(next_obs[i])
             # all_records.append(record)
 
+            # Post-step opportunity list (for reference/debugging)
             #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
             upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
             # pdb.set_trace()
@@ -158,12 +159,11 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             # print("OBS SLOT 2: ", next_obs[10:14])
             # print("OBS SLOT 3: ", next_obs[14:18])
             # print("OBS SLOT 4: ", next_obs[18:22])
-            
+
             # pdb.set_trace()
-            total_reward += reward                        
+            # total_reward already accumulated above — do not double-count
 
-
-            selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
+            # selected_target uses pre_step_opps (read before env.step())
             imaged_target = None
             if reward > 0:
                 tgt = getattr(env.unwrapped.satellite, "latest_target", None)
@@ -171,144 +171,6 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
                     imaged_target = tgt.name
             #pdb.set_trace()
 
-            record = {
-                "episode":        ep,
-                "step":           step,
-                "action":         action,
-                "action_name":    ACTION_NAMES.get(action, str(action)),
-                "reward":         float(reward),
-                "total_reward":   total_reward,
-                "terminated":     terminated,
-                "truncated":      truncated,
-                "battery":        float(next_obs[0]),
-                "storage":        float(next_obs[1]),
-                "selected_target": selected_target,
-                "imaged_target":   imaged_target,
-            }
-            for i in range(2, len(next_obs)):
-                record[f"obs_{i}"] = float(next_obs[i])
-            all_records.append(record)
-
-            obs_np = next_obs
-            step  += 1
-
-        imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
-
-        # Compute discounted return G_t for each step in this episode
-        ep_records = all_records[ep_start_idx:]
-        T = len(ep_records)
-        running = 0.0
-        for t in reversed(range(T)):
-            running = ep_records[t]["reward"] + 0.99 * running
-            all_records[ep_start_idx + t]["return_"] = running
-
-        summary_records.append({
-            "episode":           ep,
-            "steps":             step,
-            "total_reward":      total_reward,
-            "cities_imaged":     cities_imaged,
-            "imaging_efficiency": imaging_efficiency,
-            "terminated":        terminated,
-            "truncated":         truncated,
-        })
-
-        print(f"  Episode {ep+1:2d}/{episodes}  steps={step:4d}  "
-              f"total_reward={total_reward:.4f}  "
-              f"cities_imaged={cities_imaged}  "
-              f"efficiency={imaging_efficiency:.3f}  "
-              f"{'TERMINATED' if terminated else 'truncated'}")
-
-    env.close()
-    return pd.DataFrame(all_records), pd.DataFrame(summary_records)
-
-
-# ---------------------------------------------------------------------------
-# Random policy rollout
-# ---------------------------------------------------------------------------
-
-def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Run a random policy for comparison against the trained PPO.
-    Actions are sampled uniformly from the action space each step.
-    """
-    bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
-
-    env_cfg = EnvConfig()
-    env     = make_env(env_cfg)
-
-    all_records     = []
-    summary_records = []
-
-    for ep in range(episodes):
-        obs_np, _ = env.reset(seed=env_cfg.seed + ep)
-        done         = False
-        step         = 0
-        total_reward = 0.0
-
-        cities_imaged = 0
-
-        while not done and step < max_steps:
-            action = env.action_space.sample()
-
-            # Read opportunity list BEFORE env.step() so selected_target reflects
-            # what the policy observed when it chose the action, not the post-step list
-            try:
-                pre_step_opps = env.unwrapped.satellite.upcoming_opportunities
-            except Exception:
-                pre_step_opps = []
-
-            try:
-                next_obs, reward, terminated, truncated, _ = env.step(action)
-            except RuntimeError:
-                next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
-                reward, terminated, truncated = 0.0, True, False
-
-            total_reward += float(reward)
-            if float(reward) > 0:
-                cities_imaged += 1
-            done = terminated or truncated
-
-            # record = {
-            #     "episode":      ep,
-            #     "step":         step,
-            #     "action":       action,
-            #     "action_name":  ACTION_NAMES.get(action, str(action)),
-            #     "reward":       float(reward),
-            #     "total_reward": total_reward,
-            #     "terminated":   terminated,
-            #     "truncated":    truncated,
-            #     "battery":      float(next_obs[0]),
-            #     "storage":      float(next_obs[1]),
-            # }
-            # for i in range(2, len(next_obs)):
-            #     record[f"obs_{i}"] = float(next_obs[i])
-            # all_records.append(record)
-
-            #upcomingOpps = env.unwrapped.satellite.find_next_opportunities(n=5, types="target")
-            upcomingOpps = env.unwrapped.satellite.upcoming_opportunities
-
-            # for i, opp in enumerate(upcomingOpps):
-            #     print(i, 
-            #           opp["object"].name,
-            #           opp["opportunity_open"],
-            #           opp["opportunity_close"]
-            #           )
-            # print("OBS SLOT 0: ", next_obs[2:5])
-            # print("OBS SLOT 1: ", next_obs[6:9])
-            # print("OBS SLOT 2: ", next_obs[10:13])
-            # print("OBS SLOT 3: ", next_obs[14:17])
-            # print("OBS SLOT 4: ", next_obs[18:21])
-
-            # pdb.set_trace()
-            total_reward += reward   
-
-            selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
-            imaged_target = None
-            if reward > 0:
-                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
-                if tgt is not None:
-                    imaged_target = tgt.name
-            #pdb.set_trace()
             record = {
                 "episode":         ep,
                 "step":            step,
@@ -353,8 +215,248 @@ def run_random_rollout(episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
 
 
 # ---------------------------------------------------------------------------
+# Random policy rollout
+# ---------------------------------------------------------------------------
+
+def heuristic_action(obs_np, battery_threshold=0.2):
+    """
+    Simple heuristic policy:
+      - If battery fraction < battery_threshold: charge (action 0)
+      - Otherwise: image the upcoming target with the highest priority
+
+    Observation layout (from satellites.py):
+      obs[0]  = battery_charge_fraction
+      obs[2]  = priority of target 1  (then target_angle, t_open, t_close at 3,4,5)
+      obs[6]  = priority of target 2
+      obs[10] = priority of target 3
+      obs[14] = priority of target 4
+      obs[18] = priority of target 5
+    """
+    battery = float(obs_np[0])
+    if battery < battery_threshold:
+        return 0  # Charge
+
+    # Priority indices for the 5 upcoming targets
+    priority_indices = [2, 6, 10, 14, 18]
+    priorities = [float(obs_np[idx]) for idx in priority_indices]
+    return int(np.argmax(priorities)) + 1  # 1-indexed action
+
+
+def run_heuristic_rollout(episodes, max_steps,
+                          battery_threshold=0.2):
+    """
+    Run the heuristic policy:
+      - Charge if battery < battery_threshold (default 0.2)
+      - Otherwise image the highest-priority upcoming target
+    """
+    bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
+
+    env_cfg = EnvConfig()
+    env     = make_env(env_cfg)
+
+    all_records     = []
+    summary_records = []
+
+    for ep in range(episodes):
+        obs_np, _ = env.reset(seed=env_cfg.seed + ep)
+        done         = False
+        step         = 0
+        total_reward = 0.0
+        cities_imaged = 0
+
+        while not done and step < max_steps:
+            action = heuristic_action(obs_np, battery_threshold)
+
+            # Read opportunity list BEFORE env.step()
+            try:
+                pre_step_opps   = env.unwrapped.satellite.upcoming_opportunities
+                selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
+            except Exception:
+                selected_target = None
+
+            try:
+                next_obs, reward, terminated, truncated, _ = env.step(action)
+            except RuntimeError:
+                next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
+                reward, terminated, truncated = 0.0, True, False
+
+            total_reward += float(reward)
+            if float(reward) > 0:
+                cities_imaged += 1
+            done = terminated or truncated
+
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+
+            record = {
+                "episode":         ep,
+                "step":            step,
+                "action":          action,
+                "action_name":     ACTION_NAMES.get(action, str(action)),
+                "reward":          float(reward),
+                "total_reward":    total_reward,
+                "terminated":      terminated,
+                "truncated":       truncated,
+                "battery":         float(next_obs[0]),
+                "storage":         float(next_obs[1]),
+                "selected_target": selected_target,
+                "imaged_target":   imaged_target,
+            }
+            for i in range(2, len(next_obs)):
+                record[f"obs_{i}"] = float(next_obs[i])
+            all_records.append(record)
+
+            obs_np = next_obs
+            step  += 1
+
+        imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
+
+        summary_records.append({
+            "episode":            ep,
+            "steps":              step,
+            "total_reward":       total_reward,
+            "cities_imaged":      cities_imaged,
+            "imaging_efficiency": imaging_efficiency,
+            "terminated":         terminated,
+            "truncated":          truncated,
+        })
+
+        print(f"  Episode {ep+1:2d}/{episodes}  steps={step:4d}  "
+              f"total_reward={total_reward:.4f}  "
+              f"cities_imaged={cities_imaged}  "
+              f"efficiency={imaging_efficiency:.3f}  "
+              f"{'TERMINATED' if terminated else 'truncated'}")
+
+    env.close()
+    return pd.DataFrame(all_records), pd.DataFrame(summary_records)
+
+
+def run_random_rollout(episodes, max_steps):
+    """
+    Run a uniform random policy as a lower-bound baseline.
+    Actions are sampled uniformly from the action space each step.
+    """
+    bskLogging.setDefaultLogLevel(bskLogging.BSK_WARNING)
+
+    env_cfg = EnvConfig()
+    env     = make_env(env_cfg)
+
+    all_records     = []
+    summary_records = []
+
+    for ep in range(episodes):
+        obs_np, _ = env.reset(seed=env_cfg.seed + ep)
+        done         = False
+        step         = 0
+        total_reward = 0.0
+        cities_imaged = 0
+
+        while not done and step < max_steps:
+            action = env.action_space.sample()
+
+            try:
+                pre_step_opps   = env.unwrapped.satellite.upcoming_opportunities
+                selected_target = pre_step_opps[action - 1]["object"].name if (action > 0 and len(pre_step_opps) >= action) else None
+            except Exception:
+                selected_target = None
+
+            try:
+                next_obs, reward, terminated, truncated, _ = env.step(action)
+            except RuntimeError:
+                next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
+                reward, terminated, truncated = 0.0, True, False
+
+            total_reward += float(reward)
+            if float(reward) > 0:
+                cities_imaged += 1
+            done = terminated or truncated
+
+            imaged_target = None
+            if reward > 0:
+                tgt = getattr(env.unwrapped.satellite, "latest_target", None)
+                if tgt is not None:
+                    imaged_target = tgt.name
+
+            record = {
+                "episode":         ep,
+                "step":            step,
+                "action":          action,
+                "action_name":     ACTION_NAMES.get(action, str(action)),
+                "reward":          float(reward),
+                "total_reward":    total_reward,
+                "terminated":      terminated,
+                "truncated":       truncated,
+                "battery":         float(next_obs[0]),
+                "storage":         float(next_obs[1]),
+                "selected_target": selected_target,
+                "imaged_target":   imaged_target,
+            }
+            for i in range(2, len(next_obs)):
+                record[f"obs_{i}"] = float(next_obs[i])
+            all_records.append(record)
+
+            obs_np = next_obs
+            step  += 1
+
+        imaging_efficiency = (total_reward / cities_imaged) if cities_imaged > 0 else 0.0
+
+        summary_records.append({
+            "episode":            ep,
+            "steps":              step,
+            "total_reward":       total_reward,
+            "cities_imaged":      cities_imaged,
+            "imaging_efficiency": imaging_efficiency,
+            "terminated":         terminated,
+            "truncated":          truncated,
+        })
+
+        print(f"  Episode {ep+1:2d}/{episodes}  steps={step:4d}  "
+              f"total_reward={total_reward:.4f}  "
+              f"cities_imaged={cities_imaged}  "
+              f"efficiency={imaging_efficiency:.3f}  "
+              f"{'TERMINATED' if terminated else 'truncated'}")
+
+    env.close()
+    return pd.DataFrame(all_records), pd.DataFrame(summary_records)
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
+
+# Journal-style matplotlib defaults (IEEE 2-column format)
+import matplotlib as mpl
+mpl.rcParams.update({
+    "font.size":         8,
+    "axes.titlesize":    8,
+    "axes.labelsize":    8,
+    "xtick.labelsize":   7,
+    "ytick.labelsize":   7,
+    "legend.fontsize":   7,
+    "lines.linewidth":   1.2,
+    "axes.linewidth":    0.6,
+    "xtick.major.width": 0.5,
+    "ytick.major.width": 0.5,
+    "savefig.dpi":       300,
+    "savefig.bbox":      "tight",
+    "savefig.pad_inches": 0.02,
+    "axes.spines.top":   False,
+    "axes.spines.right": False,
+})
+
+def _label_subplots(axes, x=-0.18, y=1.02, fontsize=8):
+    """Add (a), (b), (c)... labels to the top-left of each subplot."""
+    import string
+    flat = axes.flatten() if hasattr(axes, "flatten") else list(axes)
+    for i, ax in enumerate(flat):
+        ax.text(x, y, f"({string.ascii_lowercase[i]})",
+                transform=ax.transAxes,
+                fontsize=fontsize, fontweight="bold",
+                va="top", ha="right")
+
 
 def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Evaluation"):
     """
@@ -366,14 +468,14 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
     df_trim   = df_steps[df_steps["step"] < min_steps]
     norm_steps = np.linspace(0, 1, min_steps)
 
-    fig, axes = plt.subplots(4, 1, figsize=(10, 9))
-    fig.suptitle(title, fontsize=13)
+    fig, axes = plt.subplots(4, 1, figsize=(3.5, 8), sharex=False)
+    fig.suptitle(title, fontsize=9, fontweight="bold")
 
     # ── Mean ± std bands for continuous metrics ───────────────────────────────
     for ax, col, ylabel in [
-        (axes[0], "battery", "Battery Fraction"),
-        (axes[1], "storage", "Storage Fraction"),
-        (axes[2], "reward",  "Step Reward"),
+        (axes[0], "battery", "Battery\nFraction"),
+        (axes[1], "storage", "Storage\nFraction"),
+        (axes[2], "reward",  "Step\nReward"),
     ]:
         data = np.array([
             df_trim[df_trim["episode"] == ep][col].values
@@ -381,13 +483,13 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
         ])
         mean = data.mean(axis=0)
         std  = data.std(axis=0)
-        ax.plot(norm_steps, mean, linewidth=1.5, label="Mean")
+        ax.plot(norm_steps, mean, linewidth=1.2, label="Mean")
         ax.fill_between(norm_steps, mean - std, mean + std,
                         alpha=0.25, label="±1 std")
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Episode Progress (normalised)")
         ax.set_xlim(0, 1)
-        ax.legend(fontsize=8, loc="upper right")
+        ax.legend(fontsize=7, loc="upper right")
 
     # ── Action frequency: mean fraction of steps per action ─────────────────
     all_actions = sorted(df_steps["action"].unique())
@@ -422,7 +524,8 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
             ha="center", va="bottom", fontsize=8,
         )
 
-    plt.tight_layout()
+    _label_subplots(axes)
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -441,30 +544,27 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
     print(f"\nTraining log: {csvs[-1].name}  ({len(df)} iterations)")
 
     # ── Figure 2a: Loss metrics ───────────────────────────────────────────────
-    fig_losses, axes = plt.subplots(2, 2, figsize=(12, 7))
-    fig_losses.suptitle(title + " — Loss Metrics", fontsize=13)
+    fig_losses, axes = plt.subplots(4, 1, figsize=(3.5, 8), sharex=True)
+    fig_losses.suptitle(title + " — Loss Metrics", fontsize=9, fontweight="bold")
 
-    axes[0, 0].plot(df["iter"], df["ep_reward_mean"], linewidth=1.5, label="Mean")
-    axes[0, 0].fill_between(df["iter"], df["ep_reward_min"], df["ep_reward_max"],
-                             alpha=0.2, label="Min / Max")
-    axes[0, 0].set_ylabel("Episode Reward")
-    axes[0, 0].set_xlabel("Training Iteration")
-    axes[0, 0].legend(fontsize=8)
+    axes[0].plot(df["iter"], df["ep_reward_mean"], linewidth=1.2, label="Mean")
+    axes[0].fill_between(df["iter"], df["ep_reward_min"], df["ep_reward_max"],
+                         alpha=0.2, label="Min / Max")
+    axes[0].set_ylabel("Episode\nReward")
+    axes[0].legend(fontsize=7)
 
-    axes[0, 1].plot(df["iter"], df["loss_policy"], linewidth=1.5, color="tomato")
-    axes[0, 1].set_ylabel("Policy Loss (L_CLIP)")
-    axes[0, 1].set_xlabel("Training Iteration")
-    axes[0, 1].axhline(0, color="gray", linewidth=0.5, linestyle="--")
+    axes[1].plot(df["iter"], df["loss_policy"], linewidth=1.2, color="tomato")
+    axes[1].set_ylabel("Policy Loss\n(L_CLIP)")
+    axes[1].axhline(0, color="gray", linewidth=0.5, linestyle="--")
 
-    axes[1, 0].plot(df["iter"], df["loss_value"], linewidth=1.5, color="darkorange")
-    axes[1, 0].set_ylabel("Value Loss (L_VF)")
-    axes[1, 0].set_xlabel("Training Iteration")
+    axes[2].plot(df["iter"], df["loss_value"], linewidth=1.2, color="darkorange")
+    axes[2].set_ylabel("Value Loss\n(L_VF)")
 
-    axes[1, 1].plot(df["iter"], df["entropy"], linewidth=1.5, color="green")
-    axes[1, 1].set_ylabel("Policy Entropy (H)")
-    axes[1, 1].set_xlabel("Training Iteration")
+    axes[3].plot(df["iter"], df["entropy"], linewidth=1.2, color="green")
+    axes[3].set_ylabel("Policy\nEntropy (H)")
+    axes[3].set_xlabel("Training Iteration")
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.5)
 
     # ── Figure 2b: Environment metrics ───────────────────────────────────────
     has_failure = "battery_failure_rate" in df.columns
@@ -474,8 +574,9 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
         return fig_losses, None
 
     n_panels = int(has_failure) + int(has_ep_len)
-    fig_env, env_axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 4))
-    fig_env.suptitle(title + " — Environment Metrics", fontsize=13)
+    # Stack vertically for single-column journal format (3.5" wide)
+    fig_env, env_axes = plt.subplots(n_panels, 1, figsize=(3.5, 2.5 * n_panels), sharex=True)
+    fig_env.suptitle(title + " — Environment Metrics", fontsize=9, fontweight="bold")
 
     if n_panels == 1:
         env_axes = [env_axes]
@@ -483,9 +584,8 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
     ax_idx = 0
     if has_failure:
         env_axes[ax_idx].plot(df["iter"], df["battery_failure_rate"] * 100,
-                              linewidth=1.5, color="purple")
-        env_axes[ax_idx].set_ylabel("Battery Failure Rate (%)")
-        env_axes[ax_idx].set_xlabel("Training Iteration")
+                              linewidth=1.2, color="purple")
+        env_axes[ax_idx].set_ylabel("Battery Failure\nRate (%)")
         env_axes[ax_idx].set_ylim(0, 100)
         env_axes[ax_idx].yaxis.set_major_formatter(
             plt.FuncFormatter(lambda y, _: f"{y:.0f}%")
@@ -494,11 +594,14 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
 
     if has_ep_len:
         env_axes[ax_idx].plot(df["iter"], df["ep_len_mean"],
-                              linewidth=1.5, color="teal")
-        env_axes[ax_idx].set_ylabel("Mean Episode Length (steps)")
-        env_axes[ax_idx].set_xlabel("Training Iteration")
+                              linewidth=1.2, color="teal")
+        env_axes[ax_idx].set_ylabel("Mean Episode\nLength (steps)")
 
-    plt.tight_layout()
+    env_axes[-1].set_xlabel("Training Iteration")
+
+    _label_subplots(axes)           # label fig_losses panels
+    _label_subplots(env_axes)       # label fig_env panels
+    plt.tight_layout(pad=0.5)
     return fig_losses, fig_env
 
 
@@ -528,34 +631,36 @@ def _add_return(df: pd.DataFrame, gamma: float = 0.99) -> pd.DataFrame:
 
 def plot_comparison(
     ppo_steps: pd.DataFrame,
+    heur_steps: pd.DataFrame,
     rnd_steps: pd.DataFrame,
     ppo_summary: pd.DataFrame,
+    heur_summary: pd.DataFrame,
     rnd_summary: pd.DataFrame,
-    title: str = "Custom PPO vs Random Policy",
+    title: str = "Policy Comparison",
     gamma: float = 0.99,
 ):
     """
-    Side-by-side mean ± std comparison of PPO vs random policy.
-    Panels: cumulative reward, mean discounted reward, step reward.
-    Plus a summary bar chart of mean total reward.
+    Three-way mean ± std comparison: PPO vs Heuristic vs Random.
+    Panels: cumulative reward, return G_t, step reward, bar chart.
     """
-    # Pre-compute discounted reward for both policies
-    ppo_steps = _add_return(ppo_steps, gamma)
-    rnd_steps = _add_return(rnd_steps, gamma)
+    ppo_steps  = _add_return(ppo_steps,  gamma)
+    heur_steps = _add_return(heur_steps, gamma)
+    rnd_steps  = _add_return(rnd_steps,  gamma)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(title, fontsize=13)
+    fig, axes = plt.subplots(4, 1, figsize=(3.5, 9))
+    fig.suptitle(title, fontsize=9, fontweight="bold")
 
     metrics = [
-        ("total_reward",      "Cumulative Reward",        axes[0, 0]),
-        ("return_",           f"Return G_t (γ={gamma})",        axes[0, 1]),
-        ("reward",            "Step Reward",              axes[1, 0]),
+        ("total_reward", "Cumulative\nPriority-Weighted Reward", axes[0]),
+        ("return_",      f"Return G_t\n(γ={gamma})",             axes[1]),
+        ("reward",       "Step Reward",                            axes[2]),
     ]
 
     for col, ylabel, ax in metrics:
         for df, label, color in [
-            (ppo_steps, "PPO",    "steelblue"),
-            (rnd_steps, "Random", "tomato"),
+            (ppo_steps,  "PPO",       "steelblue"),
+            (heur_steps, "Heuristic", "darkorange"),
+            (rnd_steps,  "Random",    "tomato"),
         ]:
             episodes  = df["episode"].unique()
             min_steps = df.groupby("episode")["step"].count().min()
@@ -567,55 +672,45 @@ def plot_comparison(
             ])
             mean = data.mean(axis=0)
             std  = data.std(axis=0)
-            ax.plot(norm_steps, mean, linewidth=1.5, label=label, color=color)
-            ax.fill_between(norm_steps, mean - std, mean + std, alpha=0.2, color=color)
+            ax.plot(norm_steps, mean, linewidth=1.2, label=label, color=color)
+            ax.fill_between(norm_steps, mean - std, mean + std, alpha=0.15, color=color)
 
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Episode Progress (normalised)")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=7)
 
     # ── Summary bar chart ─────────────────────────────────────────────────────
-    ax_bar = axes[1, 1]
-    ppo_mean = ppo_summary["total_reward"].mean()
-    rnd_mean = rnd_summary["total_reward"].mean()
-    ppo_std  = ppo_summary["total_reward"].std()
-    rnd_std  = rnd_summary["total_reward"].std()
+    ax_bar = axes[3]
+    means  = [ppo_summary["total_reward"].mean(),
+              heur_summary["total_reward"].mean(),
+              rnd_summary["total_reward"].mean()]
+    stds   = [ppo_summary["total_reward"].std(),
+              heur_summary["total_reward"].std(),
+              rnd_summary["total_reward"].std()]
+    labels = ["PPO", "Heuristic", "Random"]
+    colors = ["steelblue", "darkorange", "tomato"]
 
-    bars = ax_bar.bar(
-        ["PPO", "Random"],
-        [ppo_mean, rnd_mean],
-        yerr=[ppo_std, rnd_std],
-        color=["steelblue", "tomato"],
-        capsize=6,
-        width=0.5,
-    )
+    bars = ax_bar.bar(labels, means, yerr=stds, color=colors, capsize=5, width=0.5, alpha=0.85)
     ax_bar.set_ylabel("Mean Total Reward")
-    ax_bar.set_title("Total Reward Comparison")
+    ax_bar.set_title("Mean Total Reward per Episode")
 
-    # Annotate bars with values
-    for bar, mean, std in zip(bars, [ppo_mean, rnd_mean], [ppo_std, rnd_std]):
-        ax_bar.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + std + 0.1,
-            f"{mean:.2f}",
-            ha="center", va="bottom", fontsize=9,
-        )
+    for bar, mean, std in zip(bars, means, stds):
+        ax_bar.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + std + 0.1,
+                    f"{mean:.1f}", ha="center", va="bottom", fontsize=7,
+                    bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.8))
 
     # Print numeric summary
-    diff = ppo_mean - rnd_mean
-    pct  = (diff / abs(rnd_mean) * 100) if rnd_mean != 0 else float("inf")
-    print("\nPolicy comparison:")
-    print(f"  PPO    mean reward = {ppo_mean:.4f} ± {ppo_std:.4f}")
-    print(f"  Random mean reward = {rnd_mean:.4f} ± {rnd_std:.4f}")
-    print(f"  Difference         = {diff:.4f}  ({pct:.1f}%)")
-    if pct < 10:
-        print("  Interpretation: weak improvement over random.")
-    elif pct < 20:
-        print("  Interpretation: modest improvement over random.")
-    else:
-        print("  Interpretation: meaningful improvement over random.")
+    print("\nPolicy comparison (total reward):")
+    for label, mean, std in zip(labels, means, stds):
+        print(f"  {label:<12} mean = {mean:.4f} ± {std:.4f}")
+    for label, mean in zip(labels[1:], means[1:]):
+        diff = means[0] - mean
+        pct  = (diff / abs(mean) * 100) if mean != 0 else float("inf")
+        print(f"  PPO vs {label:<10} = {diff:+.4f}  ({pct:.1f}%)")
 
-    plt.tight_layout()
+    _label_subplots(axes)
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -623,66 +718,70 @@ def plot_comparison(
 # Cities imaged comparison
 # ---------------------------------------------------------------------------
 
-def plot_cities_imaged(ppo_summary, rnd_summary,
+def plot_cities_imaged(ppo_summary, heur_summary, rnd_summary,
                        title="Cities Imaged & Imaging Efficiency"):
-    ppo_cities = ppo_summary["cities_imaged"].values
-    rnd_cities = rnd_summary["cities_imaged"].values
-    ppo_eff    = ppo_summary["imaging_efficiency"].values
-    rnd_eff    = rnd_summary["imaging_efficiency"].values
+    ppo_cities  = ppo_summary["cities_imaged"].values
+    heur_cities = heur_summary["cities_imaged"].values
+    rnd_cities  = rnd_summary["cities_imaged"].values
+    ppo_eff     = ppo_summary["imaging_efficiency"].values
+    heur_eff    = heur_summary["imaging_efficiency"].values
+    rnd_eff     = rnd_summary["imaging_efficiency"].values
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
-    fig.suptitle(title, fontsize=13)
+    # 4 panels stacked vertically: bar + line for each metric
+    fig, axes = plt.subplots(4, 1, figsize=(3.5, 9))
+    fig.suptitle(title, fontsize=9, fontweight="bold")
 
-    labels = ["PPO", "Random"]
-    colors = ["steelblue", "tomato"]
+    labels = ["PPO", "Heuristic", "Random"]
+    colors = ["steelblue", "darkorange", "tomato"]
+    episodes = range(len(ppo_cities))
 
-    for row, (ppo_vals, rnd_vals, ylabel, row_title) in enumerate([
-        (ppo_cities, rnd_cities, "Cities Imaged",        "Cities Imaged per Episode"),
-        (ppo_eff,    rnd_eff,    "Avg Priority (reward/city)", "Imaging Efficiency (priority-weighted)"),
-    ]):
-        means = [ppo_vals.mean(), rnd_vals.mean()]
-        stds  = [ppo_vals.std(),  rnd_vals.std()]
+    metric_data = [
+        ([ppo_cities, heur_cities, rnd_cities], "Cities\nImaged",           "Cities Imaged"),
+        ([ppo_eff,    heur_eff,    rnd_eff],    "Avg Priority\n(rew/city)", "Imaging Efficiency"),
+    ]
 
-        # Bar chart
-        bars = axes[row, 0].bar(labels, means, yerr=stds, color=colors,
-                                capsize=6, width=0.5, alpha=0.8)
-        for i, vals in enumerate([ppo_vals, rnd_vals]):
-            axes[row, 0].scatter([i] * len(vals), vals, color="black",
-                                 s=20, zorder=3, alpha=0.6)
-        for bar, mean in zip(bars, means):
-            axes[row, 0].text(bar.get_x() + bar.get_width() / 2,
-                              bar.get_height() + max(stds) * 0.1 + 0.01,
-                              f"{mean:.2f}", ha="center", va="bottom", fontsize=9)
-        axes[row, 0].set_ylabel(ylabel)
-        axes[row, 0].set_title(row_title + " — Mean ± Std")
-        axes[row, 0].set_ylim(0)
+    for panel_idx, (all_vals, ylabel, row_title) in enumerate(metric_data):
+        bar_ax  = axes[panel_idx * 2]
+        line_ax = axes[panel_idx * 2 + 1]
 
-        # Per-episode line
-        episodes = range(len(ppo_vals))
-        axes[row, 1].plot(episodes, ppo_vals, "o-", color="steelblue",
-                          linewidth=1.5, label="PPO")
-        axes[row, 1].plot(episodes, rnd_vals, "s-", color="tomato",
-                          linewidth=1.5, label="Random")
-        axes[row, 1].set_xlabel("Episode")
-        axes[row, 1].set_ylabel(ylabel)
-        axes[row, 1].set_title(row_title + " — Per Episode")
-        axes[row, 1].legend(fontsize=9)
-        axes[row, 1].set_xticks(list(episodes))
-        axes[row, 1].set_ylim(0)
+        means = [v.mean() for v in all_vals]
+        stds  = [v.std()  for v in all_vals]
 
-    # Print summary
+        # Bar chart panel
+        bars = bar_ax.bar(labels, means, yerr=stds, color=colors,
+                          capsize=5, width=0.5, alpha=0.85)
+        for i, vals in enumerate(all_vals):
+            bar_ax.scatter([i] * len(vals), vals, color="black",
+                           s=15, zorder=3, alpha=0.6)
+        for bar, mean, std in zip(bars, means, stds):
+            bar_ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + std + max(stds) * 0.15,
+                        f"{mean:.2f}", ha="center", va="bottom", fontsize=7,
+                        bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.8))
+        bar_ax.set_ylabel(ylabel)
+        bar_ax.set_title(row_title + " — Mean ± Std", fontsize=8)
+        bar_ax.set_ylim(0)
+
+        # Per-episode line panel
+        for vals, label, color, marker in zip(all_vals, labels, colors, ["o", "s", "^"]):
+            line_ax.plot(episodes, vals, marker + "-", color=color,
+                         linewidth=1.2, label=label)
+        line_ax.set_ylabel(ylabel)
+        line_ax.set_title(row_title + " — Per Episode", fontsize=8)
+        line_ax.set_xlabel("Episode")
+        line_ax.legend(fontsize=7)
+        line_ax.set_xticks(list(episodes))
+        line_ax.set_ylim(0)
+
     print(f"\nCities imaged:")
-    print(f"  PPO    mean = {ppo_cities.mean():.2f} +/- {ppo_cities.std():.2f}")
-    print(f"  Random mean = {rnd_cities.mean():.2f} +/- {rnd_cities.std():.2f}")
+    for label, vals in zip(labels, [ppo_cities, heur_cities, rnd_cities]):
+        print(f"  {label:<12} mean = {vals.mean():.2f} +/- {vals.std():.2f}")
     print(f"\nImaging efficiency (avg priority per city):")
-    print(f"  PPO    mean = {ppo_eff.mean():.3f} +/- {ppo_eff.std():.3f}")
-    print(f"  Random mean = {rnd_eff.mean():.3f} +/- {rnd_eff.std():.3f}")
-    if ppo_eff.mean() > rnd_eff.mean():
-        print("  PPO is targeting higher-priority cities than random.")
-    else:
-        print("  PPO is not yet prioritising high-value cities over random.")
+    for label, vals in zip(labels, [ppo_eff, heur_eff, rnd_eff]):
+        print(f"  {label:<12} mean = {vals.mean():.3f} +/- {vals.std():.3f}")
 
-    plt.tight_layout()
+    _label_subplots(axes)
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -707,8 +806,8 @@ def plot_action_distribution(train_log_dir: Path,
         print("charge_fraction not in training CSV — retrain to capture this metric.")
         return None
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    fig.suptitle(title, fontsize=13)
+    fig, ax = plt.subplots(figsize=(3.5, 2.8))
+    fig.suptitle(title, fontsize=9, fontweight="bold")
 
     ax.plot(df["iter"], df["charge_fraction"] * 100,
             linewidth=1.5, color="steelblue", label="Charge")
@@ -726,7 +825,8 @@ def plot_action_distribution(train_log_dir: Path,
     ax.legend(fontsize=9)
     ax.axhline(50, color="gray", linewidth=0.5, linestyle="--", alpha=0.5)
 
-    plt.tight_layout()
+    _label_subplots([ax])
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -775,7 +875,8 @@ def plot_value_estimates(train_log_dir: Path,
     ax.set_ylabel("Return G_t")
     ax.legend(fontsize=9)
 
-    plt.tight_layout()
+    _label_subplots([ax])
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -835,8 +936,8 @@ def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disp
     print("=" * 65)
 
     # ── Figure ────────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    fig.suptitle(title, fontsize=13)
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3))
+    fig.suptitle(title, fontsize=9, fontweight="bold")
 
     # Pie chart of outcomes
     sizes  = [n_match, n_mismatch, n_no_image]
@@ -877,7 +978,8 @@ def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disp
     axes[1].set_xticklabels([f"Ep {ep}" for ep in episodes])
     axes[1].legend(fontsize=8)
 
-    plt.tight_layout()
+    _label_subplots(axes)
+    plt.tight_layout(pad=0.5)
     return fig
 
 
@@ -885,7 +987,7 @@ def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disp
 # Summary table and statistical comparison
 # ---------------------------------------------------------------------------
 
-def print_summary_table(ppo_summary: pd.DataFrame, rnd_summary: pd.DataFrame):
+def print_summary_table(ppo_summary: pd.DataFrame, heur_summary: pd.DataFrame, rnd_summary: pd.DataFrame):
     """
     Print a formatted summary table comparing PPO vs random across all metrics,
     with t-test p-values to assess statistical significance.
@@ -899,50 +1001,48 @@ def print_summary_table(ppo_summary: pd.DataFrame, rnd_summary: pd.DataFrame):
         ("steps",             "Episode Length"),
     ]
 
-    col_w = 22
-    print("\n" + "=" * 75)
+    print("\n" + "=" * 95)
     print("RESULTS SUMMARY")
-    print("=" * 75)
-    print(f"{'Metric':<25} {'PPO Mean':>10} {'PPO Std':>9} {'Rnd Mean':>10} {'Rnd Std':>9} {'p-value':>9}")
-    print("-" * 75)
+    print("=" * 95)
+    print(f"{'Metric':<25} {'PPO':>10} {'':>8} {'Heuristic':>10} {'':>8} {'Random':>10} {'':>8} {'p (PPO/Heur)':>13} {'p (PPO/Rnd)':>12}")
+    print(f"{'':25} {'Mean':>10} {'Std':>8} {'Mean':>10} {'Std':>8} {'Mean':>10} {'Std':>8}")
+    print("-" * 95)
 
     for col, label in metrics:
-        if col not in ppo_summary.columns or col not in rnd_summary.columns:
+        if col not in ppo_summary.columns:
             continue
-        ppo_vals = ppo_summary[col].values.astype(float)
-        rnd_vals = rnd_summary[col].values.astype(float)
+        ppo_vals  = ppo_summary[col].values.astype(float)
+        heur_vals = heur_summary[col].values.astype(float) if col in heur_summary.columns else np.array([float("nan")])
+        rnd_vals  = rnd_summary[col].values.astype(float)  if col in rnd_summary.columns  else np.array([float("nan")])
 
-        t_stat, p_val = stats.ttest_ind(ppo_vals, rnd_vals)
+        _, p_heur = stats.ttest_ind(ppo_vals, heur_vals)
+        _, p_rnd  = stats.ttest_ind(ppo_vals, rnd_vals)
 
-        sig = ""
-        if p_val < 0.001:
-            sig = "***"
-        elif p_val < 0.01:
-            sig = "**"
-        elif p_val < 0.05:
-            sig = "*"
+        def sig(p):
+            if p < 0.001: return "***"
+            if p < 0.01:  return "**"
+            if p < 0.05:  return "*"
+            return ""
 
-        print(f"{label:<25} {ppo_vals.mean():>10.3f} {ppo_vals.std():>9.3f} "
-              f"{rnd_vals.mean():>10.3f} {rnd_vals.std():>9.3f} "
-              f"{p_val:>8.4f}{sig}")
+        print(f"{label:<25} {ppo_vals.mean():>10.3f} {ppo_vals.std():>8.3f} "
+              f"{heur_vals.mean():>10.3f} {heur_vals.std():>8.3f} "
+              f"{rnd_vals.mean():>10.3f} {rnd_vals.std():>8.3f} "
+              f"{p_heur:>12.4f}{sig(p_heur):3} {p_rnd:>10.4f}{sig(p_rnd):3}")
 
-    print("-" * 75)
+    print("-" * 95)
     print("Significance: * p<0.05  ** p<0.01  *** p<0.001")
-    print("=" * 75)
+    print("=" * 95)
 
-    # Overall interpretation
-    ppo_rew = ppo_summary["total_reward"].values
-    rnd_rew = rnd_summary["total_reward"].values
-    _, p_rew = stats.ttest_ind(ppo_rew, rnd_rew)
-    pct = (ppo_rew.mean() - rnd_rew.mean()) / abs(rnd_rew.mean()) * 100
+    ppo_rew  = ppo_summary["total_reward"].values
+    heur_rew = heur_summary["total_reward"].values
+    rnd_rew  = rnd_summary["total_reward"].values
+    _, p_heur = stats.ttest_ind(ppo_rew, heur_rew)
+    _, p_rnd  = stats.ttest_ind(ppo_rew, rnd_rew)
+    pct_heur = (ppo_rew.mean() - heur_rew.mean()) / abs(heur_rew.mean()) * 100
+    pct_rnd  = (ppo_rew.mean() - rnd_rew.mean())  / abs(rnd_rew.mean())  * 100
 
-    print(f"\nPPO achieves {pct:.1f}% {'improvement' if pct >= 0 else 'degradation'} "
-          f"over random in total reward.")
-    if p_rew < 0.05:
-        print("This difference is statistically significant (p < 0.05).")
-    else:
-        print("This difference is NOT statistically significant — consider running "
-              "more episodes for a stronger result.")
+    print(f"\nPPO vs Heuristic: {pct_heur:.1f}% improvement  (p={p_heur:.4f}{'*' if p_heur < 0.05 else ''})")
+    print(f"PPO vs Random:    {pct_rnd:.1f}% improvement  (p={p_rnd:.4f}{'*' if p_rnd < 0.05 else ''})")
     print()
 
 
@@ -974,6 +1074,13 @@ def main():
     print(f"Std  total reward: {df_summary['total_reward'].std():.4f}")
 
     # ── Run random rollouts ───────────────────────────────────────────────────
+    print(f"\nRunning {args.episodes} heuristic episodes (max {args.max_steps} steps each)...")
+    df_heur_steps, df_heur_summary = run_heuristic_rollout(args.episodes, args.max_steps)
+
+    print("\nEpisode summary (Heuristic):")
+    print(df_heur_summary.to_string(index=False))
+
+    # ── Random baseline rollout ───────────────────────────────────────────────
     print(f"\nRunning {args.episodes} random episodes (max {args.max_steps} steps each)...")
     df_rnd_steps, df_rnd_summary = run_random_rollout(args.episodes, args.max_steps)
 
@@ -981,14 +1088,16 @@ def main():
     print(df_rnd_summary.to_string(index=False))
 
     # ── Summary table + statistical comparison ────────────────────────────────
-    print_summary_table(df_summary, df_rnd_summary)
+    print_summary_table(df_summary, df_heur_summary, df_rnd_summary)
 
     # pdb.set_trace()
     # ── Save CSVs ─────────────────────────────────────────────────────────────
-    df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",         index=False)
-    df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",     index=False)
-    df_rnd_steps.to_csv(paths.eval_dir / "random_eval_steps.csv",  index=False)
-    df_rnd_summary.to_csv(paths.eval_dir / "random_eval_summary.csv", index=False)
+    df_steps.to_csv(paths.eval_dir / "ppo_eval_steps.csv",               index=False)
+    df_summary.to_csv(paths.eval_dir / "ppo_eval_summary.csv",           index=False)
+    df_heur_steps.to_csv(paths.eval_dir / "heuristic_eval_steps.csv",    index=False)
+    df_heur_summary.to_csv(paths.eval_dir / "heuristic_eval_summary.csv",index=False)
+    df_rnd_steps.to_csv(paths.eval_dir / "random_eval_steps.csv",        index=False)
+    df_rnd_summary.to_csv(paths.eval_dir / "random_eval_summary.csv",    index=False)
     print(f"\nCSVs saved to: {paths.eval_dir}")
 
     # ── Plots ─────────────────────────────────────────────────────────────────
@@ -1000,38 +1109,38 @@ def main():
             paths.train_log_dir, title="Custom PPO — Training Curve"
         )
         fig3 = plot_comparison(
-            df_steps, df_rnd_steps,
-            df_summary, df_rnd_summary,
-            title=f"Custom PPO vs Random — {ckpt_label}",
+            df_steps, df_heur_steps, df_rnd_steps,
+            df_summary, df_heur_summary, df_rnd_summary,
+            title=f"PPO vs Heuristic vs Random — {ckpt_label}",
         )
 
-        fig1.savefig(paths.eval_dir / "ppo_eval_metrics.png",  dpi=150, bbox_inches="tight")
-        fig3.savefig(paths.eval_dir / "ppo_vs_random.png",     dpi=150, bbox_inches="tight")
+        fig1.savefig(paths.eval_dir / "ppo_eval_metrics.png",     dpi=300, bbox_inches="tight")
+        fig3.savefig(paths.eval_dir / "ppo_vs_baselines.png",     dpi=300, bbox_inches="tight")
         print(f"Saved: {paths.eval_dir / 'ppo_eval_metrics.png'}")
-        print(f"Saved: {paths.eval_dir / 'ppo_vs_random.png'}")
+        print(f"Saved: {paths.eval_dir / 'ppo_vs_baselines.png'}")
 
         fig4 = plot_cities_imaged(
-            df_summary, df_rnd_summary,
-            title=f"Cities Imaged — PPO vs Random ({ckpt_label})",
+            df_summary, df_heur_summary, df_rnd_summary,
+            title=f"Cities Imaged — PPO vs Heuristic vs Random ({ckpt_label})",
         )
-        fig4.savefig(paths.eval_dir / "ppo_cities_imaged.png", dpi=150, bbox_inches="tight")
+        fig4.savefig(paths.eval_dir / "ppo_cities_imaged.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {paths.eval_dir / 'ppo_cities_imaged.png'}")
 
         fig5 = plot_action_distribution(paths.train_log_dir)
         if fig5 is not None:
-            fig5.savefig(paths.eval_dir / "ppo_action_distribution.png", dpi=150, bbox_inches="tight")
+            fig5.savefig(paths.eval_dir / "ppo_action_distribution.png", dpi=300, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_action_distribution.png'}")
 
         fig6 = plot_value_estimates(paths.train_log_dir)
         if fig6 is not None:
-            fig6.savefig(paths.eval_dir / "ppo_value_estimates.png", dpi=150, bbox_inches="tight")
+            fig6.savefig(paths.eval_dir / "ppo_value_estimates.png", dpi=300, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_value_estimates.png'}")
 
         if fig2_losses is not None:
-            fig2_losses.savefig(paths.eval_dir / "ppo_training_losses.png", dpi=150, bbox_inches="tight")
+            fig2_losses.savefig(paths.eval_dir / "ppo_training_losses.png", dpi=300, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_training_losses.png'}")
         if fig2_env is not None:
-            fig2_env.savefig(paths.eval_dir / "ppo_training_env.png", dpi=150, bbox_inches="tight")
+            fig2_env.savefig(paths.eval_dir / "ppo_training_env.png", dpi=300, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_training_env.png'}")
 
         fig7 = analyze_imaging_disparity(
@@ -1039,7 +1148,7 @@ def main():
             title=f"Imaging Disparity — PPO ({ckpt_label})",
         )
         if fig7 is not None:
-            fig7.savefig(paths.eval_dir / "ppo_imaging_disparity.png", dpi=150, bbox_inches="tight")
+            fig7.savefig(paths.eval_dir / "ppo_imaging_disparity.png", dpi=300, bbox_inches="tight")
             print(f"Saved: {paths.eval_dir / 'ppo_imaging_disparity.png'}")
 
         plt.show()
