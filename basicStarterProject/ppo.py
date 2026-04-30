@@ -1,5 +1,5 @@
 """
-ppo.py  –  Custom PPO trainer for the BSK-RL spacecraft environment.
+ppo.py  –  PPO trainer for the BSK-RL spacecraft environment.
 
 Architecture
 ------------
@@ -642,7 +642,7 @@ def train(hp: PPOConfig | None = None):
     print("\nEpisode summary:")
     print(df_summary.to_string(index=False))
 
-    plot_results(df_steps, title="Custom PPO — Post-Training Evaluation")
+    plot_results(df_steps, title="PPO Post-Training Evaluation")
 
     return model, csv_path
 
@@ -652,7 +652,7 @@ def train(hp: PPOConfig | None = None):
 # ---------------------------------------------------------------------------
 
 def parse_args() -> PPOConfig:
-    # All defaults come from PPOConfig in config.py — edit that file to change
+    # All defaults come from PPOConfig in config.py - edit that file to change
     # training settings. CLI args can override individual fields if needed.
     cfg = PPOConfig()
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from Basilisk.architecture import bskLogging
 
-# Project root — passed to Ray workers so they can import config, envs, etc.
+# Project root - passed to Ray workers so they can import config, envs, etc.
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
 
 def env_creator(env_config):

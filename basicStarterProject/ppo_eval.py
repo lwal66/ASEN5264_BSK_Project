@@ -1,14 +1,14 @@
 """
-ppo_eval.py  —  Standalone evaluation script for the custom PPO.
+ppo_eval.py  -  Standalone evaluation script for the PPO.
 
 Loads the latest .pt checkpoint from outdir/checkpoints/, runs greedy
 rollouts, prints an episode summary, saves CSVs, and produces two figures:
 
-  Figure 1 — Episode metrics (battery, storage, reward, action)
+  Figure 1 - Episode metrics (battery, storage, reward, action)
              Mean ± std bands for continuous metrics across all episodes.
              Per-episode step chart for action (discrete).
 
-  Figure 2 — Training curve
+  Figure 2 - Training curve
              Reads the most recent training CSV from outdir/train_logs/
              and plots mean reward per iteration with min/max shading.
 
@@ -62,7 +62,7 @@ def load_checkpoint(checkpoint_path: Path):
     act_dim = ckpt["act_dim"]
     hp      = ckpt["hyperparams"]
 
-    # hp may be a PPOConfig or old PPOHyperparams — handle both
+    # hp may be a PPOConfig or old PPOHyperparams - handle both
     hidden_sizes = hp.hidden_sizes if hasattr(hp, "hidden_sizes") else [64, 64]
 
     model = ActorCritic(obs_dim, act_dim, hidden_sizes)
@@ -119,7 +119,7 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             try:
                 next_obs, reward, terminated, truncated, _ = env.step(action)
             except RuntimeError:
-                # Battery failure — treat as terminal with zero reward
+                # Battery failure - treat as terminal with zero reward
                 next_obs, _  = env.reset(seed=env_cfg.seed + ep + episodes)
                 reward, terminated, truncated = 0.0, True, False
 
@@ -161,7 +161,7 @@ def run_rollout(model, episodes: int, max_steps: int) -> tuple[pd.DataFrame, pd.
             # print("OBS SLOT 4: ", next_obs[18:22])
 
             # pdb.set_trace()
-            # total_reward already accumulated above — do not double-count
+            # total_reward already accumulated above - do not double-count
 
             # selected_target uses pre_step_opps (read before env.step())
             imaged_target = None
@@ -458,7 +458,7 @@ def _label_subplots(axes, x=-0.18, y=1.02, fontsize=8):
                 va="top", ha="right")
 
 
-def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Evaluation"):
+def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "PPO Evaluation"):
     """
     Figure 1: battery, storage, reward (mean ± std) + action (per episode).
     Uses normalised episode progress [0, 1] so all episodes contribute equally.
@@ -528,15 +528,15 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
     return fig
 
 
-def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Training Curve"):
+def plot_training_curve(train_log_dir: Path, title: str = "PPO Training Curve"):
     """
     Figure 2a: PPO loss metrics (reward, policy loss, value loss, entropy).
     Figure 2b: Environment metrics (battery failure rate, episode length).
-    Returns (fig_losses, fig_env) — fig_env is None if columns not available.
+    Returns (fig_losses, fig_env) - fig_env is None if columns not available.
     """
     csvs = sorted(train_log_dir.glob("*_ppo_train.csv"))
     if not csvs:
-        print(f"No training CSVs found in {train_log_dir} — skipping training curve.")
+        print(f"No training CSVs found in {train_log_dir} - skipping training curve.")
         return None, None
 
     df = pd.read_csv(csvs[-1])
@@ -544,7 +544,7 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
 
     # ── Figure 2a: Loss metrics ───────────────────────────────────────────────
     fig_losses, axes = plt.subplots(4, 1, figsize=(3.5, 8), sharex=True)
-    fig_losses.suptitle(title + " — Loss Metrics", fontsize=9, fontweight="bold")
+    fig_losses.suptitle(title + " - Loss Metrics", fontsize=9, fontweight="bold")
 
     axes[0].plot(df["iter"], df["ep_reward_mean"], linewidth=1.2, label="Mean")
     axes[0].fill_between(df["iter"], df["ep_reward_min"], df["ep_reward_max"],
@@ -575,7 +575,7 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
     n_panels = int(has_failure) + int(has_ep_len)
     # Stack vertically for single-column journal format (3.5" wide)
     fig_env, env_axes = plt.subplots(n_panels, 1, figsize=(3.5, 2.5 * n_panels), sharex=True)
-    fig_env.suptitle(title + " — Environment Metrics", fontsize=9, fontweight="bold")
+    fig_env.suptitle(title + " - Environment Metrics", fontsize=9, fontweight="bold")
 
     if n_panels == 1:
         env_axes = [env_axes]
@@ -611,7 +611,7 @@ def plot_training_curve(train_log_dir: Path, title: str = "Custom PPO — Traini
 def _add_return(df: pd.DataFrame, gamma: float = 0.99) -> pd.DataFrame:
     """
     Add a return_ column: sum of future discounted rewards from each step.
-    This is what the PPO critic estimates — G_t = r_t + γr_{t+1} + γ²r_{t+2} + ...
+    This is what the PPO critic estimates - G_t = r_t + γr_{t+1} + γ²r_{t+2} + ...
     """
     df = df.copy()
     df["return_"] = 0.0
@@ -760,7 +760,7 @@ def plot_cities_imaged(ppo_summary, heur_summary, rnd_summary,
                         f"{mean:.2f}", ha="center", va="bottom", fontsize=7,
                         bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.8))
         bar_ax.set_ylabel(ylabel)
-        bar_ax.set_title(row_title + " — Mean ± Std", fontsize=8)
+        bar_ax.set_title(row_title + " - Mean ± Std", fontsize=8)
         bar_ax.set_ylim(0)
 
         # Per-episode line panel
@@ -768,7 +768,7 @@ def plot_cities_imaged(ppo_summary, heur_summary, rnd_summary,
             line_ax.plot(episodes, vals, marker + "-", color=color,
                          linewidth=1.2, label=label)
         line_ax.set_ylabel(ylabel)
-        line_ax.set_title(row_title + " — Per Episode", fontsize=8)
+        line_ax.set_title(row_title + " - Per Episode", fontsize=8)
         line_ax.set_xlabel("Episode")
         line_ax.legend(fontsize=7)
         line_ax.set_xticks(list(episodes))
@@ -791,7 +791,7 @@ def plot_cities_imaged(ppo_summary, heur_summary, rnd_summary,
 # ---------------------------------------------------------------------------
 
 def plot_action_distribution(train_log_dir: Path,
-                              title: str = "Custom PPO — Action Distribution Over Training"):
+                              title: str = "PPO Action Distribution Over Training"):
     """
     Shows how the fraction of Charge vs Image actions evolves over training.
     A learning policy should start charging more and shift toward imaging
@@ -799,12 +799,12 @@ def plot_action_distribution(train_log_dir: Path,
     """
     csvs = sorted(train_log_dir.glob("*_ppo_train.csv"))
     if not csvs:
-        print("No training CSVs found — skipping action distribution plot.")
+        print("No training CSVs found - skipping action distribution plot.")
         return None
 
     df = pd.read_csv(csvs[-1])
     if "charge_fraction" not in df.columns:
-        print("charge_fraction not in training CSV — retrain to capture this metric.")
+        print("charge_fraction not in training CSV - retrain to capture this metric.")
         return None
 
     fig, ax = plt.subplots(figsize=(3.5, 2.8))
@@ -836,7 +836,7 @@ def plot_action_distribution(train_log_dir: Path,
 # ---------------------------------------------------------------------------
 
 def plot_value_estimates(train_log_dir: Path,
-                          title: str = "Custom PPO — Value Estimates vs Actual Return"):
+                          title: str = "PPO Value Estimates vs Actual Return"):
     """
     Compares the critic's V(s) estimates during evaluation against
     the actual discounted return G_t. Good critic = close tracking.
@@ -844,12 +844,12 @@ def plot_value_estimates(train_log_dir: Path,
     # Load eval steps CSV if it exists
     eval_csvs = list((train_log_dir.parent / "eval_outputs").glob("ppo_eval_steps.csv"))
     if not eval_csvs:
-        print("No eval_steps CSV found — run ppo_eval.py first.")
+        print("No eval_steps CSV found - run ppo_eval.py first.")
         return None
 
     df = pd.read_csv(eval_csvs[0])
     if "return_" not in df.columns:
-        print("return_ column not in eval CSV — skipping value estimate plot.")
+        print("return_ column not in eval CSV - skipping value estimate plot.")
         return None
 
     episodes  = df["episode"].unique()
@@ -898,7 +898,7 @@ def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disp
     Prints a console summary and returns a figure with two panels.
     """
     if "selected_target" not in df_steps.columns or "imaged_target" not in df_steps.columns:
-        print("selected_target / imaged_target columns not found — skipping disparity analysis.")
+        print("selected_target / imaged_target columns not found - skipping disparity analysis.")
         return None
 
     # Only look at imaging actions (action != 0 = Charge)
@@ -930,7 +930,7 @@ def analyze_imaging_disparity(df_steps: pd.DataFrame, title: str = "Imaging Disp
     print("  Interpretation:")
     print(f"  - Mismatch steps often indicate the satellite imaged a nearby")
     print(f"    target faster than expected and captured a second city within")
-    print(f"    the same step window — these are still successful imaging events.")
+    print(f"    the same step window - these are still successful imaging events.")
     print(f"  - No-image steps indicate the satellite could not slew to the")
     print(f"    selected target within the step duration, suggesting the policy")
     print(f"    sometimes selects targets that are too far away to reach in time.")
@@ -1052,7 +1052,7 @@ def print_summary_table(ppo_summary: pd.DataFrame, heur_summary: pd.DataFrame, r
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate custom PPO checkpoint")
+    parser = argparse.ArgumentParser(description="Evaluate PPO checkpoint")
     parser.add_argument("--episodes",  type=int, default=5,  help="Number of eval episodes")
     parser.add_argument("--max-steps", type=int, default=100, help="Max steps per episode")
     parser.add_argument("--no-plot",   action="store_true",   help="Skip plots")
@@ -1105,14 +1105,14 @@ def main():
     if not args.no_plot:
         ckpt_label = checkpoint_path.stem
 
-        fig1 = plot_episode_metrics(df_steps, title=f"Custom PPO — Evaluation ({ckpt_label})")
+        fig1 = plot_episode_metrics(df_steps, title=f"PPO Evaluation ({ckpt_label})")
         fig2_losses, fig2_env = plot_training_curve(
-            paths.train_log_dir, title="Custom PPO — Training Curve"
+            paths.train_log_dir, title="PPO Training Curve"
         )
         fig3 = plot_comparison(
             df_steps, df_heur_steps, df_rnd_steps,
             df_summary, df_heur_summary, df_rnd_summary,
-            title=f"PPO vs Heuristic vs Random — {ckpt_label}",
+            title=f"PPO vs Heuristic vs Random - {ckpt_label}",
         )
 
         fig1.savefig(paths.eval_dir / "ppo_eval_metrics.png",     dpi=300, bbox_inches="tight")
@@ -1122,7 +1122,7 @@ def main():
 
         fig4 = plot_cities_imaged(
             df_summary, df_heur_summary, df_rnd_summary,
-            title=f"Cities Imaged — PPO vs Heuristic vs Random ({ckpt_label})",
+            title=f"Cities Imaged - PPO vs Heuristic vs Random ({ckpt_label})",
         )
         fig4.savefig(paths.eval_dir / "ppo_cities_imaged.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {paths.eval_dir / 'ppo_cities_imaged.png'}")
@@ -1146,7 +1146,7 @@ def main():
 
         fig7 = analyze_imaging_disparity(
             df_steps,
-            title=f"Imaging Disparity — PPO ({ckpt_label})",
+            title=f"Imaging Disparity - PPO ({ckpt_label})",
         )
         if fig7 is not None:
             fig7.savefig(paths.eval_dir / "ppo_imaging_disparity.png", dpi=300, bbox_inches="tight")
