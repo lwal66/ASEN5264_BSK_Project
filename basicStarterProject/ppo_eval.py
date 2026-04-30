@@ -468,14 +468,13 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
     df_trim   = df_steps[df_steps["step"] < min_steps]
     norm_steps = np.linspace(0, 1, min_steps)
 
-    fig, axes = plt.subplots(4, 1, figsize=(3.5, 8), sharex=False)
+    fig, axes = plt.subplots(3, 1, figsize=(3.5, 6), sharex=False)
     fig.suptitle(title, fontsize=9, fontweight="bold")
 
     # ── Mean ± std bands for continuous metrics ───────────────────────────────
     for ax, col, ylabel in [
         (axes[0], "battery", "Battery\nFraction"),
-        (axes[1], "storage", "Storage\nFraction"),
-        (axes[2], "reward",  "Step\nReward"),
+        (axes[1], "reward",  "Step\nReward"),
     ]:
         data = np.array([
             df_trim[df_trim["episode"] == ep][col].values
@@ -507,17 +506,17 @@ def plot_episode_metrics(df_steps: pd.DataFrame, title: str = "Custom PPO — Ev
     mean_frac = fractions.mean(axis=0)
     std_frac  = fractions.std(axis=0)
 
-    bars = axes[3].bar(action_labels, mean_frac, yerr=std_frac,
+    bars = axes[2].bar(action_labels, mean_frac, yerr=std_frac,
                        capsize=4, color="steelblue", alpha=0.8)
-    axes[3].set_ylabel("Action Frequency")
-    axes[3].set_xlabel("Action")
-    axes[3].set_ylim(0, 1)
-    axes[3].yaxis.set_major_formatter(
+    axes[2].set_ylabel("Action Frequency")
+    axes[2].set_xlabel("Action")
+    axes[2].set_ylim(0, 1)
+    axes[2].yaxis.set_major_formatter(
         plt.FuncFormatter(lambda y, _: f"{y:.0%}")
     )
     # Annotate bars with percentage
     for bar, frac in zip(bars, mean_frac):
-        axes[3].text(
+        axes[2].text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.02,
             f"{frac:.1%}",
@@ -647,13 +646,12 @@ def plot_comparison(
     heur_steps = _add_return(heur_steps, gamma)
     rnd_steps  = _add_return(rnd_steps,  gamma)
 
-    fig, axes = plt.subplots(4, 1, figsize=(3.5, 9))
+    fig, axes = plt.subplots(3, 1, figsize=(3.5, 7))
     fig.suptitle(title, fontsize=9, fontweight="bold")
 
     metrics = [
         ("total_reward", "Cumulative\nPriority-Weighted Reward", axes[0]),
         ("return_",      f"Return G_t\n(γ={gamma})",             axes[1]),
-        ("reward",       "Step Reward",                            axes[2]),
     ]
 
     for col, ylabel, ax in metrics:
@@ -677,10 +675,13 @@ def plot_comparison(
 
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Episode Progress (normalised)")
-        ax.legend(fontsize=7)
+
+    # Set legend locations per panel independently
+    axes[0].legend(fontsize=7, loc="upper left")
+    axes[1].legend(fontsize=7, loc="upper right")
 
     # ── Summary bar chart ─────────────────────────────────────────────────────
-    ax_bar = axes[3]
+    ax_bar = axes[2]
     means  = [ppo_summary["total_reward"].mean(),
               heur_summary["total_reward"].mean(),
               rnd_summary["total_reward"].mean()]
@@ -1052,7 +1053,7 @@ def print_summary_table(ppo_summary: pd.DataFrame, heur_summary: pd.DataFrame, r
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate custom PPO checkpoint")
-    parser.add_argument("--episodes",  type=int, default=5,   help="Number of eval episodes")
+    parser.add_argument("--episodes",  type=int, default=5,  help="Number of eval episodes")
     parser.add_argument("--max-steps", type=int, default=100, help="Max steps per episode")
     parser.add_argument("--no-plot",   action="store_true",   help="Skip plots")
     args = parser.parse_args()
